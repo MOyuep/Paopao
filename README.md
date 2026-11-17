@@ -1,4 +1,3 @@
-[PaoPao-仓库README.md](https://github.com/user-attachments/files/34978728/PaoPao-.README.md)
 # PaoPao · 陪伴 Agent 的可审计长期记忆模块
 
 面向陪伴 Agent 的可审计长期记忆模块，内置冲突消解、中文检索补丁、契约测试与运行时护栏。
