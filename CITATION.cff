@@ -1,0 +1,28 @@
+cff-version: 1.2.0
+message: "If you use this report, please cite it as below."
+type: report
+title: "Engineering Principles for Auditable Long-Term Memory in Companion Agents"
+abstract: >-
+  A technical report on rebuilding the long-term memory of a single-user
+  companion agent around five engineering invariants: a single write path,
+  a single retrieval path, measured (not asserted) thresholds,
+  direction-asserted ranking terms, and a startup auditor that detects
+  un-migrated existing data. Includes empirical results on a 26-query
+  golden set and an anytime-valid betting confidence sequence replacing
+  rolling-window intervals for streaming monitors.
+authors:
+  - name: "MOyuep"
+version: "0.1.0"
+date-released: "2026-11-17"
+repository-code: "https://github.com/MOyuep/Paopao"
+url: "https://github.com/MOyuep/Paopao"
+license: "GPL-3.0-only"
+keywords:
+  - long-term memory
+  - LLM agents
+  - memory architecture
+  - anytime-valid inference
+  - confidence sequences
+  - contradiction resolution
+  - hybrid retrieval
+  - companion agents
