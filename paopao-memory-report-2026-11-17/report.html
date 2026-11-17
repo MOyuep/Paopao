@@ -790,7 +790,10 @@ sha256sum -c SHA256SUMS.txt
 
 # Windows (PowerShell)
 Get-FileHash .\泡泡记忆模块报告-2026-11-17.pdf -Algorithm SHA256</code></pre>
-<p><strong>任何文件被改动，哈希即不符。</strong> 这是"定版"的意义——不是防拷贝，是防篡改。</p></article></section>
+<p><strong>任何文件被改动，哈希即不符。</strong> 这是"定版"的意义——不是防拷贝，是防篡改。</p>
+<p><strong>为什么这两行里没有具体页数和哈希？</strong> 因为它们是<strong>派生值</strong>：由源文件算出来，不是手写的。写进正文就一定会随内容变化而过期。按 SSOT（source-of-truth matrix）原则，本夹的分工是：</p>
+<table><thead><tr><th>类别</th><th>文件</th><th>规矩</th></tr></thead><tbody><tr><td><strong>源</strong>（手写）</td><td><code>*.md</code> / <code>LICENSE</code></td><td>只写事实，不写派生值</td></tr><tr><td><strong>派生</strong>（生成）</td><td><code>report.html</code> / <code>*.pdf</code> / <code>SHA256SUMS.txt</code></td><td>勿手改，由一条命令重新生成</td></tr></tbody></table>
+<p>页数与 PDF 哈希只出现在 <code>SHA256SUMS.txt</code> 的头部。改完任何 <code>.md</code>，跑一次构建即可，不用手工同步任何数字。</p></article></section>
 <section id="doc-code说明md"><article><h1>为什么这里没有代码</h1>
 <blockquote><p>一句话：<strong>代码快照里含真实记忆内容，不适合放在可能被分享的目录里。</strong></p></blockquote>
 <hr>
