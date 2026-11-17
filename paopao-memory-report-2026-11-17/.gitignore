@@ -1,0 +1,6 @@
+﻿# GitHub 系统垃圾
+.DS_Store
+Thumbs.db
+desktop.ini
+*.swp
+*~

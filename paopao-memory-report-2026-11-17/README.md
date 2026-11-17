@@ -119,7 +119,7 @@ GNU General Public License for more details.
 |---|---|
 | 定版日期 | 2026-11-17 |
 | 源码版本 | 以 `SHA256SUMS.txt` 为准 |
-| 定版 PDF | `泡泡记忆模块报告-2026-11-17.pdf`（61 页） |
+| 定版 PDF | `泡泡记忆模块报告-2026-11-17.pdf`（63 页） |
 | 校验文件 | `SHA256SUMS.txt` |
 
 **校验方法**：
