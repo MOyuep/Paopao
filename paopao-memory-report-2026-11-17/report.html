@@ -1,0 +1,819 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>泡泡记忆模块 · 2026-11-17</title>
+<style>
+  :root{--fg:#1f2328;--bg:#fff;--muted:#656d76;--line:#d0d7de;--code-bg:#f6f8fa;--accent:#0969da}
+  @media (prefers-color-scheme:dark){:root{--fg:#e6edf3;--bg:#0d1117;--muted:#8b949e;--line:#30363d;--code-bg:#161b22;--accent:#58a6ff}}
+  *{box-sizing:border-box}
+  body{margin:0;font:17px/1.85 -apple-system,"Segoe UI","Microsoft YaHei",sans-serif;color:var(--fg);background:var(--bg)}
+  nav{position:sticky;top:0;z-index:9;background:var(--bg);border-bottom:1px solid var(--line);padding:10px 24px;display:flex;gap:16px;flex-wrap:wrap}
+  nav a{color:var(--muted);text-decoration:none;font-size:14px;padding:4px 8px;border-radius:6px}
+  nav a:hover{color:var(--accent);background:var(--code-bg)}
+  main{max-width:860px;margin:0 auto;padding:24px 24px 140px}
+  section{padding-top:32px;border-top:1px solid var(--line);margin-top:32px}
+  section:first-child{border-top:none;margin-top:0;padding-top:0}
+  h1{font-size:30px;line-height:1.35;border-bottom:1px solid var(--line);padding-bottom:10px;margin-top:8px}
+  h2{font-size:23px;margin-top:40px}
+  h3{font-size:18px;margin-top:28px}
+  a{color:var(--accent)}
+  code{background:var(--code-bg);padding:2px 6px;border-radius:5px;font-size:.88em;font-family:"Cascadia Code",Consolas,monospace}
+  pre{background:var(--code-bg);padding:14px;border-radius:8px;overflow:auto;border:1px solid var(--line)}
+  pre code{background:none;padding:0}
+  table{border-collapse:collapse;width:100%;margin:18px 0;font-size:14.5px;display:block;overflow:auto}
+  th,td{border:1px solid var(--line);padding:9px 12px;text-align:left;vertical-align:top}
+  th{background:var(--code-bg);font-weight:600}
+  blockquote{margin:18px 0;padding:10px 18px;border-left:4px solid var(--line);color:var(--muted);background:var(--code-bg);border-radius:0 6px 6px 0}
+  blockquote p{margin:4px 0}
+  hr{border:none;border-top:1px solid var(--line);margin:36px 0}
+  ul,ol{padding-left:26px}
+  li{margin:7px 0}
+  @media print{nav{display:none}section{page-break-before:always}}
+</style>
+</head>
+<body>
+<nav><a href="#doc-01报告md">01 · 这一夜做了什么</a><a href="#doc-02架构md">02 · 架构</a><a href="#doc-03文献md">03 · 文献与依据</a><a href="#doc-04实测数据md">04 · 实测数据</a><a href="#doc-05安全说明md">05 · 安全说明</a><a href="#doc-06工程防御护栏md">06 · 第七章：工程防御与运行时护栏</a><a href="#doc-07存量迁移与体检md">07 · 存量迁移与体检</a><a href="#doc-READMEmd">泡泡记忆模块 · 2026-11-17 一夜工作留档</a><a href="#doc-code说明md">为什么这里没有代码</a></nav>
+<main><section id="doc-01报告md"><article><h1>01 · 这一夜做了什么</h1>
+<blockquote><p>结构统一为：<strong>问题 → 做法 → 证据 → 结果</strong>。</p><p>所有数字都在 <code>04-实测数据.md</code> 里有产生方法。</p></blockquote>
+<hr>
+<h2>零、起点：不是一个"不好用"的系统，是一个"会静默损坏数据"的系统</h2>
+<p>改造前最严重的几个故障，共同点是<strong>都不报错</strong>：</p>
+<table><thead><tr><th>现象</th><th>根因</th></tr></thead><tbody><tr><td>一条真实约定从记忆里消失</td><td>冲突判定用"词面重叠数 ≥ 2"，中文里太容易满足，一条无关的系统记录把它顶进了归档</td></tr><tr><td>记忆里出现"甲其实是乙"这类张冠李戴的事实</td><td>没有区分"关于这个人的事实"和"关于系统维修的记录"，后者挤掉了前者</td></tr><tr><td>用户说的话被当成 AI 自己说的</td><td>没有"谁说的"这个维度，全混在一条流里</td></tr><tr><td>中文单字搜不到</td><td>分词器把连续汉字里的单字丢掉了</td></tr><tr><td>归档了但捞不回来</td><td>只有作废入口，没有反向操作</td></tr><tr><td>同一个错误在聊天里报两次</td><td>没有去重</td></tr></tbody></table>
+<p><strong>改造的总目标不是加功能，是先让它不坏，再让它可调。</strong></p>
+<hr>
+<h2>一、写入层：所有入口收口到一个函数</h2>
+<h3>问题</h3>
+<p>写入有四个入口（自动提取、主动记、确认、纠正），每个都自己拼字段。</p>
+<p>后果是具体的两次事故：</p>
+<ol><li><strong>新增的 <code>polarity</code> 字段只接在自动提取一条路上</strong>，主动记的条目全空，覆盖率卡在 149/150。</li><li><strong><code>id</code> 在重构时被删掉了</strong>，新写入的条目 <code>id=undefined</code> —— 而删除/恢复都是按 id 操作，等于这条记忆<strong>以后谁都动不了</strong>，但它还在有效状态、会出现在检索结果里。</li></ol>
+<h3>做法</h3>
+<p>新建 <code>memory-pipeline.js</code>，导出唯一入口：</p>
+<pre><code data-lang="">writeMemory(candidate, { items, enrich, now })
+  → { action: ADD | UPDATE | CONFLICT | REJECT, item?, replaced?, verdict?, reason? }
+
+阶段划分：
+  stage 1  sanitize     规范化 + 基础过滤        （纯函数）
+  stage 2  metaGate     词表级元信息拦截          （纯函数）
+  stage 3  enrich       模型增强（类别/极性/重要性）（可注入，失败跳过）
+  stage 4  derive       补齐全部字段              （唯一一处）
+  stage 5  consolidate  合并 / 冲突消解</code></pre>
+<p>四个入口全部改成走它，并加了<strong>结构断言</strong>：</p>
+<pre><code data-lang="">✅ bridge 不再直调 upsertMemory
+✅ qq_remember 不再直调 upsertMemory</code></pre>
+<p>谁再绕过去直调，测试立刻红。</p>
+<h3>证据</h3>
+<p>改完后 <code>polarity</code> 覆盖率 151/151、<code>id</code> 缺失 0 条。</p>
+<h3>设计取舍</h3>
+<ul><li><strong>模型调用隔离在可注入的 <code>enrich</code> 阶段</strong>：失败就跳过，绝不阻塞写入。</li><li><strong>核心判定是纯函数</strong>：不需要模型就能单元测试。</li></ul>
+<hr>
+<h2>二、数据模型：双时态只做一个轴，且名字必须诚实</h2>
+<h3>问题</h3>
+<p>想给记忆加"有效期"，一开始字段名叫 <code>validFrom</code> / <code>validTo</code>。</p>
+<h3>做法</h3>
+<p>核对文献后发现：<code>valid_*</code> 在双时态模型里专指<strong>世界时间</strong>（事实在世界里何时成立），而我能拿到的只是<strong>记录时间</strong>（我们何时相信）。</p>
+<p>用 <code>valid_*</code> 的名字装记录时间的值，是<strong>命名撒谎</strong>——以后真要加世界时间时，这个名字已经被占死，只能被迫改名迁移。</p>
+<p>所以字段叫 <code>beliefFrom</code> / <code>beliefTo</code>，并在注释里写死"这不是 valid-time"。</p>
+<p>写入规则：</p>
+<table><thead><tr><th>时机</th><th>动作</th></tr></thead><tbody><tr><td>条目创建</td><td><code>beliefFrom = createdAt</code></td></tr><tr><td>冲突退役</td><td><code>beliefTo = supersededAt</code></td></tr><tr><td>手动作废</td><td><code>beliefTo = now</code></td></tr><tr><td>恢复</td><td><strong>清除</strong> <code>beliefTo</code></td></tr></tbody></table>
+<h3>证据</h3>
+<pre><code data-lang="">✅ 有效条目不带 beliefTo
+✅ 归档条目都带 beliefTo
+✅ 区间不倒挂（0 条 to &lt; from）</code></pre>
+<h3>设计取舍</h3>
+<ul><li>归档<strong>不删除</strong>，带闭合区间保留，可恢复。这是文献里两条独立来源的共同做法。</li><li>只给归档条目显示区间；有效条目不显示（空 = 仍有效，标出来只是噪音）。</li></ul>
+<hr>
+<h2>三、矛盾判定：三次演进，每次都被数据推翻一次</h2>
+<h3>v1：词面重叠（已废弃）</h3>
+<pre><code data-lang="">极性不同 &amp;&amp; (相似度 ≥ 0.55 || 共享二元组 ≥ 2)</code></pre>
+<p><strong>中文里"共享二元组 ≥ 2"太容易满足。</strong> 真实事故：一条"某时刻提醒我"的约定，被一条系统记录（相似度只有 0.035）判成矛盾顶进归档。</p>
+<h3>v2：剥掉否定词后比相似度</h3>
+<pre><code data-lang="">极性不同 &amp;&amp; 剥掉否定词后相似度 ≥ 0.62</code></pre>
+<p>实测：</p>
+<table><thead><tr><th>对照</th><th>剥词后相似度</th><th>结果</th></tr></thead><tbody><tr><td>爱吃 / 不爱吃</td><td>1.000</td><td>判矛盾 ✓</td></tr><tr><td>会 / 不会</td><td>1.000</td><td>判矛盾 ✓</td></tr><tr><td>约定 / 修复记录</td><td>0.035</td><td>不判 ✓</td></tr><tr><td><strong>喜欢 / 讨厌</strong></td><td><strong>0.333</strong></td><td><strong>漏判</strong> ✗</td></tr></tbody></table>
+<p>反义词对识别不到。当时的取舍是"宁可漏判也不误删"。</p>
+<h3>v3：加语义判据（当前）</h3>
+<p>本机有本地向量服务（bge-small-zh-v1.5）。</p>
+<p><strong>第一版想法是错的</strong>：直接"相似度 ≥ 0.75 就判矛盾"。</p>
+<p>做两组测量才发现不行：</p>
+<p><strong>测量一 · 真实数据分布</strong>（151 条有效记忆，两两 1 万余对）</p>
+<pre><code data-lang="">最高 10 对: 0.797, 0.781, 0.749, 0.748, 0.744, 0.735...
+p50=0.406  p90=0.522  p99=0.651</code></pre>
+<p>最相似的那对是<strong>同一件事的两条不同陈述</strong>（不是矛盾），相似度 0.797。</p>
+<p><strong>测量二 · 真实长度下的对照</strong></p>
+<table><thead><tr><th>案例</th><th>相似度</th><th>极性</th><th>期望</th></tr></thead><tbody><tr><td>上心 / 不上心</td><td>0.856</td><td>异</td><td>矛盾</td></tr><tr><td>8分 / 不喜欢</td><td>0.807</td><td>异</td><td>矛盾</td></tr><tr><td>重视 / 不重视</td><td>0.787</td><td>异</td><td>矛盾</td></tr><tr><td><strong>同人不同事</strong></td><td><strong>0.797</strong></td><td><strong>同</strong></td><td><strong>非矛盾</strong></td></tr><tr><td>极性异但不同事</td><td>0.642</td><td>异</td><td>非矛盾</td></tr><tr><td>无关</td><td>0.376</td><td>同</td><td>非矛盾</td></tr></tbody></table>
+<p><strong>真矛盾下限 0.787，非矛盾上限 0.797 —— 区间重叠，没有可用阈值。</strong></p>
+<h3>最终设计：极性闸门优先</h3>
+<pre><code data-lang="">① 极性相同  → 直接排除（不管向量多高）
+② 极性不同  → 向量 ≥ 0.72 才判矛盾（0.642 与 0.787 之间取中）
+③ 没有向量  → 降级为 v2 的词面判据</code></pre>
+<p>那对 0.797 的非矛盾被第①步拦住，根本不进相似度判定。</p>
+<h3>极性本身：词表不可靠</h3>
+<p>词表判极性实测有 <strong>40%</strong> 被判成"负极性"，两个原因：</p>
+<ol><li><strong>「别X」是最常用的劝告句式</strong>（如「别见外」「别客气」这类通用劝告），那是给 AI 的建议，不是对事实的否定。</li><li><strong>子串误匹配</strong>：「特别」「别人」「区别」都含「别」。</li></ol>
+<p>修法两层：</p>
+<ul><li><strong>词表去掉「别」</strong>（40% → 30%），翻过来的条目逐条看过，全是肯定句。</li><li><strong>结构化极性</strong>：抽取时让模型输出 <code>polarity</code> 字段，判定时字段优先，词表只作兜底。</li></ul>
+<p>回填历史数据时做了对照：<strong>词表判 45 条负，模型判 4 条</strong>，差的 41 条全是词表误判。所以<strong>回填必须用模型</strong>——用词表会把 41 条错误永久冻结进字段。</p>
+<hr>
+<h2>四、检索层：两条路径各自残缺，收口后才谈得上调优</h2>
+<h3>问题</h3>
+<table><thead><tr><th>路径</th><th>用什么</th><th>缺什么</th></tr></thead><tbody><tr><td>工具检索（对外）</td><td>BM25 × 重要性 × 新鲜度 × 置顶</td><td><strong>没有向量</strong></td></tr><tr><td>上下文注入（内部）</td><td>BM25 + 向量 RRF</td><td><strong>没有重要性 / 新鲜度 / 置顶</strong></td></tr></tbody></table>
+<p>对外检索换个说法就搜不到；内部注入又让旧事实和昨天的事实同等对待。</p>
+<h3>做法</h3>
+<p>新建 <code>memory-retrieve.js</code>，唯一入口 <code>retrieve()</code>：</p>
+<pre><code data-lang="">RRF(BM25 排名, 向量排名) + 三因子</code></pre>
+<p>两条路径都改用它，并删掉桥接里的本地 RRF 副本。</p>
+<h3>调优：三因子不该做乘法</h3>
+<p>扩到 26 条 golden query 后暴露：</p>
+<table><thead><tr><th>写法</th><th>hit@1</th><th>hit@3</th><th>MRR</th><th>词面档</th></tr></thead><tbody><tr><td>纯 RRF</td><td>19/26</td><td>23/26</td><td>0.816</td><td>10/10</td></tr><tr><td><strong>RRF × 因子（原）</strong></td><td><strong>17/26</strong></td><td>23/26</td><td>0.777</td><td><strong>8/10</strong></td></tr><tr><td>RRF + 因子裁决（新）</td><td><strong>19/26</strong></td><td>23/26</td><td>0.816</td><td><strong>10/10</strong></td></tr></tbody></table>
+<p><strong>根因</strong>：乘法会把"相关度接近但因子不同"的条目顺序翻掉，本该第一的掉到第 2~3 位。</p>
+<p><strong>改法</strong>：</p>
+<pre><code data-lang="">score = round(相关度, 1e-4)              ← 主键
+      + 重要性 × 新鲜度 × 置顶 × 1e-5      ← 次键（必须小于主键步长）</code></pre>
+<p>相关度不被动摇；真正的平手才由三因子裁决。</p>
+<p><strong>效果：hit@1 恢复 19/26，词面档从 8/10 回到 10/10，而三因子依然生效。</strong></p>
+<h3>融合策略对比</h3>
+<p>测了 8 种：</p>
+<table><thead><tr><th>方法</th><th>hit@1</th><th>MRR</th></tr></thead><tbody><tr><td>BM25</td><td>17/26</td><td>0.736</td></tr><tr><td>向量</td><td>16/26</td><td>0.782</td></tr><tr><td><strong>RRF(1:1)</strong></td><td><strong>19/26</strong></td><td><strong>0.816</strong></td></tr><tr><td>RRF(1:2)</td><td>18/26</td><td>0.810</td></tr><tr><td>归一化加法(0.5)</td><td>19/26</td><td>0.812</td></tr><tr><td>RRF × 因子</td><td>17/26</td><td>0.777</td></tr></tbody></table>
+<p><strong>结论：RRF(1:1) 最优，保留。</strong> 加法并列但没有优势，不换。</p>
+<p>分档看得很清楚：</p>
+<table><thead><tr><th>档</th><th>BM25</th><th>向量</th><th>RRF</th></tr></thead><tbody><tr><td>词面</td><td><strong>10/10</strong></td><td>8/10</td><td><strong>10/10</strong></td></tr><tr><td>语义</td><td>4/10</td><td><strong>6/10</strong></td><td><strong>6/10</strong></td></tr><tr><td>意图</td><td>3/6</td><td>2/6</td><td><strong>3/6</strong></td></tr></tbody></table>
+<p><strong>融合的价值在语义档：4/10 → 6/10。</strong></p>
+<hr>
+<h2>五、稳定性：三个故障驱动的模块</h2>
+<h3>会话历史中毒</h3>
+<p>报错 <code>tool_use ids were found without tool_result blocks</code> —— 之前只是把英文错误原样转发到聊天，而且下一轮还会失败。</p>
+<p>现在：识别 → 换新会话 → 给一句人话 → 去重。</p>
+<h3>额度耗尽</h3>
+<p>中转账号 402 时之前会把错误抛给用户。现在：识别 → 设冷却（2 小时）→ 清掉会话模型映射 → 自动退回官方通道。</p>
+<h3>错误重复上报</h3>
+<p>同一秒两条相同错误（两个 request_id），用户看到两遍相同的抱怨。加了按 key 的去重（120 秒窗口 / 200 key）。</p>
+<h3>沉睡状态机</h3>
+<p>三态（清醒 / 观察中 / 沉睡）+ 观察闸门，独立成模块。</p>
+<p>重构时做了 <strong>500 组随机对拍</strong>（旧实现 vs 新实现，输入相同输出必须相同），确认没改行为。</p>
+<hr>
+<h2>六、度量体系</h2>
+<h3>契约测试 296 项</h3>
+<table><thead><tr><th>文件</th><th>项数</th><th>钉住什么</th></tr></thead><tbody><tr><td><code>test-memory-contract.mjs</code></td><td>201</td><td>字段口径、合并与冲突、元信息拦截、写入入口收口、<strong>排序方向</strong></td></tr><tr><td><code>test-wake-state-contract.mjs</code></td><td>53</td><td>沉睡状态机（含 500 组随机对拍）</td></tr><tr><td><code>test-error-classify-contract.mjs</code></td><td>42</td><td>错误分类不能误伤、去重</td></tr></tbody></table>
+<p>全部<strong>只读</strong>。</p>
+<p>其中两条是"结构断言"——直接读源码确认没有绕过统一入口：</p>
+<pre><code data-lang="">✅ bridge 不再直调 upsertMemory
+✅ qq_remember 不再直调 upsertMemory</code></pre>
+<h3>检索评估 26 条 golden query</h3>
+<p>分三档（词面 / 语义 / 意图），对比 BM25 / 向量 / RRF。</p>
+<p>这是第一次有"该召回的到底召没召回"的可量化数字。</p>
+<hr>
+<h2>七、已知局限（诚实清单）</h2>
+<table><thead><tr><th>局限</th><th>影响</th><th>为什么暂时不修</th></tr></thead><tbody><tr><td>没有结构化 subject/predicate</td><td>矛盾判定靠文本近似，长句可能漏判</td><td>抽取三元组成本高，会把自然语言拆碎</td></tr><tr><td>只有记录时间，没有世界时间</td><td>回答不了"这个事实在世界里何时为真"</td><td>抽不出来：带时间词的条目只占一成且多为模糊表述</td></tr><tr><td>golden set 只有 26 条</td><td>测不出新鲜度加权是否有效</td><td>缺"同主题不同时间"的对照用例</td></tr><tr><td>词表极性仍有约三成噪声</td><td>历史条目极性判定不准</td><td>新条目已用模型标注覆盖</td></tr><tr><td>元信息拦截靠词表会漏</td><td>自然语言变体追不上</td><td>已加模型二次判定兜底</td></tr></tbody></table>
+<hr>
+<h2>八、这一夜踩的方法论坑</h2>
+<ol><li><strong>同一份逻辑写两份</strong>——踩了四次（分词器、矛盾判定、否定词表、embedding）。现在全部单一收口，并有结构断言。</li><li><strong>新加字段只接一个入口</strong>——踩了两次（<code>polarity</code>、<code>id</code>）。现在字段补齐收口在 <code>deriveFields</code>。</li><li><strong>用自造的用例测自己的实现</strong>——第一次测元信息拦截时，我写的测试句恰好命中了词表，以为通了；换成真实入口一写就漏。<strong>用真实入口测，不要用造好的样本测。</strong></li><li><strong>评估工具自己也要被怀疑</strong>——对比脚本里 Map 用了下标访问，导致 RRF 全 0 分，我据此得出了一个错误结论。</li><li><strong>端口探测只用一个信号</strong>——会假阴性。要用进程表交叉验证。</li><li><strong>判断"守护进程不稳定"前先排除自己</strong>——采样 3 分钟，PID 一次没变；所谓"反复死"全是我自己手动杀进程造成的。</li></ol></article></section>
+<section id="doc-02架构md"><article><h1>02 · 架构</h1>
+<blockquote><p>路径一律用占位符：<code>&lt;PROJECT_ROOT&gt;</code> = 项目根目录，<code>&lt;STATE&gt;</code> = 运行时状态目录。</p></blockquote>
+<hr>
+<h2>一、模块地图</h2>
+<pre><code data-lang="">&lt;PROJECT_ROOT&gt;/src/
+│
+├─ 记忆层核心 ────────────────────────────────────────────────
+│  memory-pipeline.js    写入唯一入口 writeMemory()。五阶段流水线。
+│  memory-schema.js      类型定义 + 归一化 + 校验 + deriveFields()（字段补齐唯一处）
+│  memory-store.js       分片文件读写（IO）
+│  memory-merge.js       合并 / 冲突消解 / 证据加权裁决
+│  memory-index.js       统一索引（长期记忆 + 图片摘要 + 会话话题 → 一个可搜索数组）
+│  memory-retrieve.js    检索唯一入口 retrieve()。RRF + 三因子平手裁决
+│  memory-embed.js       向量封装 + 内容键缓存（桥接与工具共用）
+│  memory-write.js       写入闸门 sanitizeMemoryText()（规范化 + 基础过滤）
+│  correction.js         极性与纠错意图识别
+│
+├─ 稳定性 ───────────────────────────────────────────────────
+│  error-classify.js     错误分类（中毒 / 额度）+ 上报去重
+│  wake-state.js         沉睡状态机（清醒 / 观察中 / 沉睡）
+│
+├─ 编排层 ───────────────────────────────────────────────────
+│  bridge.js             主进程：QQ 事件循环、会话、注入、自动沉淀
+│  mcp-snowluma-safe.js  MCP 工具层（对外暴露 recall / remember / forget / restore / pin 等）
+│
+└─ 测试与评估 ───────────────────────────────────────────────
+   test-memory-contract.mjs          201 项
+   test-wake-state-contract.mjs       53 项
+   test-error-classify-contract.mjs   42 项
+   eval-retrieval.mjs                26 条 golden query 的检索评估
+   eval-fusion.mjs                   8 种融合策略对比（调参用）</code></pre>
+<p><strong>为什么这么拆</strong>：早期单文件上万行，任何逻辑只能"改了重启看效果"。拆出来后每个模块都能脱离主进程单独测试——296 项断言不需要起进程、不需要连模型。</p>
+<hr>
+<h2>二、写入链路</h2>
+<pre><code data-lang="">调用方（四个入口）
+  │  · 自动提取（定时从对话提炼）
+  │  · 工具主动记
+  │  · 人工确认待确认记忆
+  │  · 纠正
+  ▼
+writeMemory(candidate, { items, enrich })
+  │
+  ├─ stage 1  sanitize ──────────── 规范化正文、拒空、拒太长
+  │             subject 归一（禁「老板/对方/用户」，统一为「他」）
+  │
+  ├─ stage 2  metaGate ──────────── 词表级元信息拦截（快、免费）
+  │             判据：系统名词 AND 验证措辞
+  │
+  ├─ stage 3  enrich ────────────── 【可注入，失败跳过】
+  │             一次模型调用同时产出：
+  │               category   A=关于某人 / B=关于系统维修
+  │               polarity   positive / negative
+  │               importance 1~10
+  │
+  ├─ stage 4  derive ────────────── deriveFields()：补齐全部字段（唯一一处）
+  │             speaker   candidate &gt; 推断（insight→self，其余→owner）
+  │             basis     candidate &gt; 推断（insight→inferred，其余→stated）
+  │             importance candidate &gt; enrich &gt; kind 兜底
+  │             polarity  candidate &gt; enrich &gt; 不写（留给读时兜底）
+  │             id        没有就生成
+  │             status / createdAt / updatedAt
+  │
+  └─ stage 5  consolidate ───────── upsertMemory()
+                 先找最相似的候选（同 kind、同 user）
+                 再判是否矛盾（极性闸门 + 语义判据）
+                 ├ 矛盾 → 按证据强度裁决（谁的原话更可信）
+                 └ 不矛盾 → 合并（只在"新文包含旧文"时替换正文）
+  ▼
+返回 { action: ADD | UPDATE | CONFLICT | REJECT }
+  │
+  └─ 调用方决定后续（日志 / 回复用户 / 落盘）
+
+落盘：调用方统一 saveAll()</code></pre>
+<h3>为什么"返回动作"而不是"顺手做掉"</h3>
+<p>调用方需要知道发生了什么才能正确回复用户（"已记住" / "已更新" / "与旧条矛盾" / "不入库：原因"）。 如果写成"函数内部默默处理"，调用方只能猜。</p>
+<hr>
+<h2>三、检索链路</h2>
+<pre><code data-lang="">查询
+  ▼
+buildPool()  ── 按用户/群/类型过滤 + 可选的"只看归档"
+  ▼
+┌──────────────── 两路召回 ────────────────┐
+│                                           │
+│  词面：BM25（分词见下）                     │
+│  语义：向量余弦（内容键缓存，服务挂了跳过）    │
+│                                           │
+└───────────────────┬───────────────────────┘
+                    ▼
+            RRF 融合（rank-based，避免不同量纲直接相加）
+                    ▼
+          scoreWithTiebreak()
+            主键 = round(相关度, 1e-4)
+            次键 = 重要性 × 新鲜度 × 置顶 × 1e-5
+                    │
+      相关度永远压过因子；只有完全平手才看因子
+                    ▼
+              排序 → 分页 → 返回</code></pre>
+<h3>分词（中文的关键）</h3>
+<p>每条内容切成：<strong>单汉字 + 双字词 + 拉丁词</strong>。</p>
+<ul><li>单汉字<strong>保留为检索词</strong>：否则「茶」这类单字查询会漏（实测修复前搜「茶」0 条，修复后 12 条）。</li><li>但单汉字<strong>不计入文档长度</strong>：否则中文天然字数多会把 BM25 分数压低。</li><li>停用词单独一张表。</li></ul>
+<h3>三因子</h3>
+<table><thead><tr><th>因子</th><th>公式</th><th>范围</th><th>作用</th></tr></thead><tbody><tr><td>重要性</td><td><code>0.6 + 0.08 × min(10, imp)</code></td><td>0.6 ~ 1.4</td><td>约定 &gt; 偏好 &gt; 事实 &gt; 判断</td></tr><tr><td>新鲜度</td><td>30 天内 = 1；之后线性衰减，130 天触底</td><td>0.45 ~ 1</td><td>越新越优先</td></tr><tr><td>置顶</td><td>置顶 × 1.3</td><td>1 ~ 1.3</td><td>人工指定优先</td></tr></tbody></table>
+<hr>
+<h2>四、数据模型</h2>
+<p>一条记忆的字段：</p>
+<pre><code data-lang="">id           唯一句柄（删除/恢复/置顶都按它操作）
+content      正文（主语统一第三人称「他」）
+kind         fact / preference / promise / insight / lore / event / identity / weekly
+speaker      owner（他说的） / self（我说的/我推的）
+basis        stated（他原话） / inferred（我推断的）
+polarity     positive / negative   ← 慢字段，未标注则读时用词表兜底
+importance   1~10
+status       live / invalid（手动作废） / superseded（被更强证据顶掉）
+tags         标签数组
+userId / scope / groupId   作用域
+source       写入路径（auto-extract / qq_remember / correction / reflect / legacy）
+beliefFrom   开始相信的时间
+beliefTo     不再相信的时间（空 = 仍有效）
+createdAt / updatedAt
+
+审计字段（只在退役时写）
+invalidReason / invalidatedBy
+supersededBy / contentSupersededFrom
+restoreNote / restoreAt
+pinned / pinnedAt</code></pre>
+<h3>三个作用域</h3>
+<pre><code data-lang="">shared    所有人可见
+group     某个群可见
+private   某个用户可见（默认）</code></pre>
+<p><strong>默认 private</strong> 是刻意的——记忆里大量内容只该给当事人看。</p>
+<hr>
+<h2>五、存储布局</h2>
+<pre><code data-lang="">&lt;STATE&gt;/
+  global-memory.json          长期记忆（一个数组）
+  users/&lt;id&gt;.json             按用户分片
+  image-memos.json            看过的图的文字摘要
+  &lt;会话状态&gt;.json              会话/话题/唤醒配置
+  backups/&lt;tag&gt;-&lt;时间&gt;/        每次批量改动前的快照（可回滚）
+  memory-pending.json         待确认记忆队列</code></pre>
+<p><strong>批量改数据一律先备份再改</strong>，备份目录名带改动标签和时间戳。</p>
+<hr>
+<h2>六、关键不变量（由测试保证）</h2>
+<pre><code data-lang="">1.  insight + 来源=反思  →  speaker=self 且 basis=inferred
+2.  speaker=owner        →  basis=stated
+3.  有效条目里不许出现以「老板」「用户」开头的正文
+4.  有效条目里不许有系统元信息（promise 类型豁免）
+5.  有效条目不带 beliefTo；归档条目都带
+6.  beliefTo 不得早于 beliefFrom
+7.  所有条目都有 id
+8.  没有 polarity 字段时回退词面判断
+9.  否定词表只有一个定义处
+10. 不许绕过 writeMemory 直调底层 upsert
+11. 排序方向：越新越高、越重要越高、置顶更高
+12. 因子不能推翻明显的相关度差</code></pre>
+<hr>
+<h2>七、一次查询的完整例子</h2>
+<blockquote><p>举例用<strong>中性合成场景</strong>，不是真实记忆内容。</p></blockquote>
+<pre><code data-lang="">输入：查询「那个人平时用什么工具」
+  ↓
+过滤：只看该用户可见的有效记忆 → 151 条
+  ↓
+词面：BM25 打分 → 排名（这条查询与原文无共同词，正确答案排第 4）
+语义：向量余弦 → 排名（正确答案排第 1）
+  ↓
+RRF 融合：正确答案在语义排 1、词面排 4 → 融合后进前 3
+  ↓
+三因子：它是普通事实（importance 5）、较旧（freshness 0.9）→ 微调
+  ↓
+返回：正确答案命中</code></pre>
+<p>对比：纯词面会把这条查询排到第 4（miss top3），<strong>融合后进 top3</strong>。这就是向量那套的价值。</p></article></section>
+<section id="doc-03文献md"><article><h1>03 · 文献与依据</h1>
+<blockquote><p>每篇都写清：<strong>取了什么、故意没取什么、为什么</strong>。</p><p>"参考"不等于"照搬"——有几处是读了论文后<strong>明确决定不跟</strong>的。</p></blockquote>
+<hr>
+<h2>一、核心参考</h2>
+<h3>[1] TOKI：双时态算子代数</h3>
+<blockquote><p>Ziming Wang. *TOKI: A Bitemporal Operator Algebra for Contradiction Resolution</p><p>in LLM-Agent Persistent Memory.* arXiv:2606.06240.</p><p>The Hong Kong University of Science and Technology.</p><p>&lt;https://arxiv.org/abs/2606.06240&gt;</p></blockquote>
+<p><strong>取了什么</strong></p>
+<table><thead><tr><th>论文概念</th><th>本项目落地</th></tr></thead><tbody><tr><td>双时态基底（valid-time × system-time 两个轴）</td><td>只做 system-time 那一轴，字段名 <code>beliefFrom</code> / <code>beliefTo</code></td></tr><tr><td>矛盾消解写<strong>双行</strong>：current winner + audit loser</td><td>冲突时旧条转 <code>superseded</code>（进审计），新条 live，可恢复</td></tr><tr><td>审计行<strong>携带 provenance</strong>，任何更晚时间都能查</td><td>归档条目保留 <code>invalidReason</code> / <code>supersededBy</code>，恢复时展示原因</td></tr><tr><td>四种策略按隔离级别分层：last-writer-wins / <strong>evidence-weighted</strong> / await-confirmation / per-rule</td><td>默认 last-writer-wins；冲突时升级为 <strong>evidence-weighted</strong>（按依据强弱裁决）</td></tr><tr><td>矛盾的形式定义：subject 相同、predicate 相同、object 不同、valid-time 有交集</td><td>无结构化三元组，用"文本相似度"近似前两者，"极性相反"近似第三者</td></tr></tbody></table>
+<p><strong>故意没取</strong></p>
+<ol><li><strong>双时态只做了一个轴。</strong></li></ol>
+<p>   <code>valid_<em></code> 表示事实在<strong>世界</strong>里何时成立，抽不出来（带时间词的条目只占约一成，且多为"最近/现在"这类模糊表述）。    硬填等于编造。所以字段直接叫 <code>belief</em></code>，**不叫 <code>valid*</code><strong>——把那个名字留给将来真能抽出世界时间的时候。    </strong>命名撒谎比缺字段更贵。**</p>
+<ol><li><strong>不做并发控制的算子代数。</strong></li></ol>
+<p>   论文核心贡献是把矛盾消解建模成写时并发控制（多写者 + 判定器 + 隔离级别排除异常）。    本系统是单进程串行写、没有并发、没有判定器——那套机器没有对应的问题可解。    只借用了它的<strong>数据模型</strong>那一半。</p>
+<ol><li><strong>不做时间旅行查询。</strong></li></ol>
+<p>   能力上做得到（区间已在数据里），但使用场景不需要"某个时刻我们相信什么"。</p>
+<hr>
+<h3>[2] NeuSymMS：生产级神经符号记忆系统</h3>
+<blockquote><p><em>NeuSymMS: A Hybrid Neuro-Symbolic Memory System for LLM Agents.</em> arXiv:2605.17596.</p><p>&lt;https://arxiv.org/abs/2605.17596&gt;</p></blockquote>
+<p><strong>取了什么</strong></p>
+<blockquote><p>冲突触发条件：候选与已有事实<strong>共享 subject 和 relation</strong>，但 <strong>value 不同</strong>。</p></blockquote>
+<p>这直接塑造了矛盾判定的两段式结构：先判"是不是在讲同一件事"，再判"说的内容是否相反"。</p>
+<blockquote><p>否定被抽取器编码成显式关系（<code>no_longer_has</code> / <code>stopped</code> / <code>lost</code>），</p><p>规则把它们翻译成对肯定事实的撤回，<strong>否定式本身不入库</strong>。</p></blockquote>
+<p>这条让人意识到：<strong>极性应该在抽取时结构化标注，不能靠词面猜</strong>。 落地为 <code>polarity</code> 字段（模型抽取时输出），词面判断只作旧条目的降级路径。</p>
+<p><strong>这篇最重要的价值是一个反例</strong></p>
+<blockquote><p>avoiding embedding-based retrieval or additional scoring models ...</p><p>zero-cost, low-latency decisions with <strong>explicit rule-based justification</strong></p></blockquote>
+<p>论文明确说他们<strong>不用向量打分</strong>做矛盾判定，而用结构化的 subject+relation + 编辑距离（阈值 0.85）。</p>
+<p>据此做了一次实测，确认<strong>单靠向量相似度分不开"矛盾"和"同一件事的两种说法"</strong>， 所以向量只能作为极性闸门之后的次级判据。</p>
+<p><strong>故意没取</strong></p>
+<ul><li><strong>不做完整的三元组抽取</strong>（subject / relation / value）。对聊天陪伴场景成本过高，且会把自然语言表述拆碎。代价是矛盾判定只能用近似。</li></ul>
+<hr>
+<h3>[3] Graphiti：带时间维的知识图谱</h3>
+<blockquote><p>neoneye/agent-memory-atlas, <code>content/systems/graphiti.md</code></p><p>&lt;https://github.com/neoneye/agent-memory-atlas&gt;</p></blockquote>
+<p><strong>取了什么</strong></p>
+<blockquote><p>矛盾时把旧边的 <code>invalid_at</code> 设为新边的 <code>valid_at</code>，<code>expired_at</code> 记为<strong>图学到它的时间</strong>，<strong>保留这条边</strong>。</p></blockquote>
+<blockquote><p>旧事实可以带着<strong>已闭合的有效区间</strong>留在图里，而不是被删掉。</p></blockquote>
+<p>两条原则完全对应本项目的做法：归档保留 + <code>beliefTo</code> 闭合 + 可恢复。</p>
+<p><strong>独立印证的价值</strong>：Graphiti 的四字段（<code>valid_at</code> / <code>invalid_at</code> / <code>created_at</code> / <code>expired_at</code>） 和 TOKI 的双轴说的是同一件事。两篇独立来源印证，才敢确信"时间要分轴、退役不要删"。</p>
+<hr>
+<h3>[4] CJK 分词与 BM25</h3>
+<blockquote><p>oh-my-openagent, PR #9275 —— 中日韩分词修正。</p><p>结论：每个汉字都应作为独立词项参与匹配，但<strong>不计入 BM25 的文档长度</strong>。</p><p>实测韩语 MRR 0.559 → 0.990。</p></blockquote>
+<p><strong>取了什么</strong></p>
+<pre><code data-lang="">tokenizeZh(text)  单汉字保留（除停用词）+ 二元组 + 拉丁词
+docLength(terms)  只计主词项，单汉字不计入
+bm25Scores(...)   归一化用文档长度数组，不用 token 总数</code></pre>
+<p><strong>这条修掉了一个真实故障</strong>：用户搜单字返回 0 条（旧分词器把连续汉字里的单字丢掉了）。</p>
+<hr>
+<h3>[5] EMNLP 2022：视角转换</h3>
+<blockquote><p><em>He Said, She Said: Style Transfer with Perspective Shifting.</em> EMNLP 2022.</p></blockquote>
+<p>四种操作：指代消解、句法重写、形式化、情绪归属。</p>
+<p><strong>取了什么</strong></p>
+<p>用于"<strong>第一人称事实的归属</strong>"问题：一条记忆写「我认为某专辑 8 分」， 读的人会以为是 AI 自己的观点，其实是用户说的。</p>
+<p>核心原则：</p>
+<blockquote><p><strong>a first-person fact is about its speaker, never a subject</strong></p><p>（第一人称的事实属于说这句话的人，而不是句子里的主语）</p></blockquote>
+<p>落地为：所有关于用户的记忆<strong>一律改写成第三人称</strong>，主语只用「他」。</p>
+<hr>
+<h2>二、检索与评估相关</h2>
+<h3>[6] @usetheo/memory：检索评分与融合的做法</h3>
+<blockquote><p><code>@usetheo/memory</code>（npm，预发布）README。</p><p>&lt;https://www.npmjs.com/package/@usetheo/memory&gt;</p></blockquote>
+<p><strong>取了什么</strong></p>
+<blockquote><p>评分 = <code>recency(decay) × importance(LLM-judged 1-10 at write) × relevance(cosine)</code></p><p>检索用加法融合 <code>(semantic + BM25 + entity_boost) / max_possible</code>，</p><p>并有"语义先过阈值再融合"的约定。</p></blockquote>
+<p>三条落地：</p>
+<ol><li><strong>重要性在写入时由模型判</strong> → 本项目 <code>enrich</code> 阶段一次模型调用同时产出 <code>polarity</code> 和 <code>importance</code>。</li><li><strong>阈值来自实测</strong> → 本项目所有阈值都附了产生方法。</li><li><strong>融合方式要比较</strong> → 本项目实测 8 种融合，最终保留 RRF。</li></ol>
+<p><strong>故意没取 / 实测后没跟</strong></p>
+<ul><li><strong>归一化加法融合</strong>：实测本地数据上 RRF(1:1) 略优（hit@1 19/26 vs 19/26，MRR 0.816 vs 0.812），没有换的理由。</li><li><strong>三因子做乘法</strong>：论文用乘法，本项目实测发现乘法会把 hit@1 从 19/26 拉到 17/26（相关度接近时顺序被因子翻掉），所以改成"平手裁决"。</li></ul>
+<hr>
+<h3>[7] agent-memory-atlas：横向审查与踩坑清单</h3>
+<blockquote><p>neoneye/agent-memory-atlas，<code>content/overview.md</code></p><p>&lt;https://github.com/neoneye/agent-memory-atlas&gt;</p></blockquote>
+<p><strong>这篇的价值不在方案，在两处警告。</strong></p>
+<p><strong>警告一：排序项方向颠倒会静默存活</strong></p>
+<blockquote><p>两个系统在决定模型看到什么的函数里带了一个<strong>方向颠倒的排序项</strong>——</p><p>recency 用升序算、argsort 升序注入——两个都能存活，</p><p>因为这项<strong>只占分数零头</strong>、输出<strong>靠合理性判断</strong>、<strong>没有断言检查方向</strong>。</p></blockquote>
+<p>据此给项目补了 12 条方向断言（新鲜度单调性、重要性单调性、置顶、RRF、以及"因子不能推翻相关度"）。</p>
+<p><strong>警告二：两个时间列不等于两个轴，除非有代码给它们写不同的值</strong></p>
+<blockquote><p>某系统的 <code>valid_from</code> / <code>created_at</code> / <code>updated_at</code> 三个时间列读起来像双时态，</p><p>但<strong>没有任何代码给它们写不同的值</strong>，所以不具备双时态。</p></blockquote>
+<p>这条直接导致本项目把字段从 <code>validFrom/validTo</code> 改名为 <code>beliefFrom/beliefTo</code>—— 名字必须说真话。</p>
+<p><strong>警告三：不能失败的测试比没有测试更糟</strong></p>
+<blockquote><p>六个系统共有一个缺陷：测试的断言在代码层面无法被违反。</p></blockquote>
+<p>据此加了两条<strong>结构断言</strong>（直接读源码确认没有绕过统一入口），而不是只测行为。</p>
+<hr>
+<h2>二点五、第七章（工程防御护栏）新增引用</h2>
+<p>这些是后半段接入运行时护栏时查证的文献（第七章 7.6.9 均已核验可访问）：</p>
+<table><thead><tr><th>文献</th><th>出处</th><th>支撑的护栏</th></tr></thead><tbody><tr><td>Waudby-Smith &amp; Ramdas, <em>Estimating means of bounded random variables by betting</em></td><td>JRSS-B 86(1):1–27, 2024</td><td>7.6.0 anytime-valid betting CS（替代 Wilson+Bonferroni）</td></tr><tr><td>Howard et al., <em>Time-uniform nonparametric confidence sequences</em></td><td>Ann. Statist. 49(2):1055–1080, 2021</td><td>betting CS 的一般理论基础</td></tr><tr><td>Farquhar et al., <em>Detecting hallucinations in LLMs using semantic entropy</em></td><td>Nature 630:625–630, 2024</td><td>7.6.2 语义熵（检测端弃词表）</td></tr><tr><td>The Fusion Tax: A Diagnostic Analysis of When Hybrid Retrieval Hurts</td><td>IEEE Access 14:159620–159637, 2026</td><td>7.6.4 融合损害 13–48%，do-not-fuse 一等公民</td></tr><tr><td>Kish, <em>Survey Sampling</em></td><td>1965 / 1987</td><td>7.6.1 有效样本量 n_eff=(Σw)²/Σw²</td></tr><tr><td>Pearl, <em>Probabilistic Reasoning in Intelligent Systems</em></td><td>Morgan Kaufmann, 1988</td><td>7.6.1 Noisy-OR 独立性前提（去相关依据）</td></tr></tbody></table>
+<p><strong>关键落地修正</strong>（据文献实测得出，不是照抄）：</p>
+<ul><li>betting CS 的紧致性来自<strong>可预测 plug-in λ</strong>，不是固定 λ——固定 λ=1 在小差距时输钱（过度下注），实测推翻。</li><li>语义熵论文用双向蕴含（NLI）判等价，本项目无 NLI 模型，用<strong>嵌入余弦相似度</strong>作工程近似。</li></ul>
+<hr>
+<h2>三、间接参考</h2>
+<p>以下概念经由上面几篇引用而采用，未直接查阅原始文献：</p>
+<table><thead><tr><th>概念</th><th>出处</th><th>用在哪</th></tr></thead><tbody><tr><td>写时并发控制、隔离异常分类</td><td>Berenson et al. 1995; Adya et al. 2000</td><td>理解 TOKI 的隔离分层，未落地</td></tr><tr><td>区间代数</td><td>Allen 1983</td><td>理解"两个有效区间是否有交集"，未落地</td></tr><tr><td>双时态数据库（有效时间 / 事务时间）</td><td>Snodgrass &amp; Ahn 1986; Snodgrass 2000</td><td>字段设计的理论依据</td></tr><tr><td>记忆的四种操作（保留 / 合并 / 衰减 / 淘汰）</td><td>记忆巩固相关综述</td><td>合并分支与归档保留</td></tr><tr><td>supersede 而非 delete；只增不减的真值保留</td><td>同上</td><td>退役不删、可恢复</td></tr><tr><td>统一 TTL 有害</td><td>同上</td><td>会话话题按属性分级设置存活时长</td></tr></tbody></table>
+<hr>
+<h2>四、一句话总结每篇的贡献</h2>
+<table><thead><tr><th>文献</th><th>一句话</th></tr></thead><tbody><tr><td>TOKI</td><td>告诉我们要<strong>双行 + 双时间轴</strong>，但并发控制那套我们不需要</td></tr><tr><td>NeuSymMS</td><td>告诉我们矛盾靠<strong>结构</strong>判、别靠打分，并给了"向量不能单独用"的反例</td></tr><tr><td>Graphiti</td><td>独立印证"退役保留、闭合区间"，并给了四字段的具体命名</td></tr><tr><td>oh-my-openagent #9275</td><td>告诉我们对中文，<strong>单汉字必须参与匹配但不能算文档长度</strong></td></tr><tr><td>EMNLP 2022</td><td>告诉第一人称事实的归属原则，催生了全量第三人称化</td></tr><tr><td>@usetheo/memory</td><td>给了"写时判重要性"和"融合要比较"的做法；乘法那条实测后改了</td></tr><tr><td>agent-memory-atlas</td><td>三条警告：排序要有方向断言、时间列要有不同值、测试要能失败</td></tr></tbody></table>
+<hr>
+<h2>五、引用说明</h2>
+<p>本文档中的 arXiv 编号、代码路径、项目名均来自实际检索结果。 两篇 arXiv 论文的编号<strong>晚于</strong>本机时间戳，疑为预印本编号规则差异，未做进一步核实；引用时请以<strong>标题</strong>为准检索。</p>
+<p>所有实测数据（相似度数值、条数统计、命中率）都在 <code>04-实测数据.md</code> 里标注了产生方法与样本量，可复现。</p></article></section>
+<section id="doc-04实测数据md"><article><h1>04 · 实测数据</h1>
+<blockquote><p>每个数字都注明<strong>产生方法与样本量</strong>，可复现。</p><p>原则：<strong>阈值来自实测，不是拍脑袋。</strong> 没在这里留痕的数字 = 没测过。</p></blockquote>
+<hr>
+<h2>一、数据规模</h2>
+<p>采样时间 2026-11-17。</p>
+<table><thead><tr><th>项</th><th>数值</th></tr></thead><tbody><tr><td>长期记忆总条目</td><td>204</td></tr><tr><td>有效（live）</td><td>151</td></tr><tr><td>归档（invalid + superseded）</td><td>53</td></tr><tr><td>图片摘要</td><td>约 400</td></tr><tr><td>会话话题</td><td>约 60</td></tr><tr><td>已向量化</td><td>151（与有效条目数一致）</td></tr></tbody></table>
+<hr>
+<h2>二、语义相似度分布</h2>
+<p><strong>方法</strong>：取 60 条有效记忆，两两计算余弦相似度，共 <strong>1770 对</strong>。</p>
+<table><thead><tr><th>分位</th><th>相似度</th></tr></thead><tbody><tr><td>最高 10 对</td><td>0.797 / 0.781 / 0.749 / 0.748 / 0.744 / 0.735 / 0.707 / 0.700 / 0.700 / 0.699</td></tr><tr><td>p50</td><td>0.406</td></tr><tr><td>p90（前 10%）</td><td>0.522</td></tr><tr><td>p99（前 1%）</td><td>0.651</td></tr><tr><td>最大值</td><td>0.797</td></tr></tbody></table>
+<p><strong>关键观察</strong>：最相似的那对是<strong>同一件事的两条不同陈述</strong>（不是矛盾）。 这直接否定了"单一相似度阈值判矛盾"的方案。</p>
+<hr>
+<h2>三、矛盾判定对照</h2>
+<p><strong>方法</strong>：构造人工对照对，用<strong>真实向量服务</strong>计算相似度。</p>
+<table><thead><tr><th>案例</th><th>长度</th><th>相似度</th><th>极性</th><th>期望</th></tr></thead><tbody><tr><td>爱吃 / 不爱吃</td><td>5 / 6</td><td>0.904</td><td>异</td><td>矛盾</td></tr><tr><td>上心 / 不上心</td><td>24 / 16</td><td>0.856</td><td>异</td><td>矛盾</td></tr><tr><td>打 8 分 / 不喜欢</td><td>35 / 25</td><td>0.807</td><td>异</td><td>矛盾</td></tr><tr><td>重视X / 不重视</td><td>38 / 19</td><td>0.787</td><td>异</td><td>矛盾</td></tr><tr><td><strong>同人不同事（同一作品 ×2）</strong></td><td>26 / 27</td><td><strong>0.797</strong></td><td><strong>同</strong></td><td><strong>非矛盾</strong></td></tr><tr><td>极性异但不同事</td><td>—</td><td>0.642</td><td>异</td><td>非矛盾</td></tr><tr><td>约定 / 修复记录</td><td>长 / 中</td><td>0.566</td><td>异</td><td>非矛盾</td></tr><tr><td>同主题不同事</td><td>35 / 40</td><td>0.537</td><td>同</td><td>非矛盾</td></tr><tr><td>无关</td><td>5 / 5</td><td>0.486</td><td>同</td><td>非矛盾</td></tr><tr><td>无关</td><td>24 / 35</td><td>0.376</td><td>同</td><td>非矛盾</td></tr></tbody></table>
+<p><strong>区间重叠</strong>：</p>
+<pre><code data-lang="">真矛盾下限   0.787
+非矛盾上限   0.797   ← 重叠</code></pre>
+<p><strong>结论</strong>：单靠相似度无可用阈值，必须先用极性闸门过滤。</p>
+<p><strong>阈值确定</strong>：极性不同但非矛盾的样本最高 0.642，真矛盾最低 0.787 → 取 <strong>0.72</strong>（居中）。</p>
+<hr>
+<h2>四、极性判定的误判率</h2>
+<p><strong>方法</strong>：统计 151 条有效记忆中被判为"负极性"的比例。</p>
+<table><thead><tr><th>词表</th><th>判为负</th><th>比例</th></tr></thead><tbody><tr><td>原表（含「别」）</td><td>60</td><td><strong>40%</strong></td></tr><tr><td>去掉「别」</td><td>45</td><td>30%</td></tr></tbody></table>
+<p><strong>翻过来的那批逐条核对，全部是肯定句 + 劝告</strong>，模式如下（举例已脱敏，非真实内容）：</p>
+<ul><li>某句含「特别」一词——「特别」里含「别」，纯子串误匹配</li><li>形如「别浪费时间去解释」「别催流程」——劝告，不是否定事实</li><li>形如「他做事认真，别打断他」——整句是肯定的，却因一个「别」被判负</li></ul>
+<p><strong>结论</strong>：「别」在这类文本里几乎总是<strong>给 AI 的行为建议</strong>，不是对事实的否定。</p>
+<hr>
+<h2>五、极性回填：词表 vs 模型</h2>
+<p><strong>方法</strong>：对 151 条历史条目分别用词表和模型判极性，比对差异。</p>
+<table><thead><tr><th></th><th>判为 negative</th></tr></thead><tbody><tr><td>词表</td><td><strong>45 条</strong></td></tr><tr><td>模型</td><td><strong>4 条</strong></td></tr></tbody></table>
+<p><strong>差的 41 条逐条核对，全是词表误判</strong>，模式如下（举例已脱敏）：</p>
+<pre><code data-lang="">形如「没吃饭就出门了」        「没」是"还没"的意思
+形如「不必事事回应」          劝告
+形如「不用太当真」            劝告
+形如「建议他别用那种材料」     建议
+形如「我回说不认识」          整句是事实陈述</code></pre>
+<p><strong>41 / 151 ≈ 27% 噪声。</strong></p>
+<p><strong>结论</strong>：回填必须用模型。用词表回填等于把 27% 的错误<strong>永久冻结</strong>进字段（因为读时优先信字段）。</p>
+<p>模型判出的 4 条 negative 也逐条核过，都是真否定。</p>
+<hr>
+<h2>六、中文分词修复</h2>
+<p><strong>问题</strong>：搜单字返回 0 条。</p>
+<p><strong>根因</strong>：分词器把连续汉字串里的单字丢掉了，只保留二元组。而单字查询（如「茶」）需要单字本身是词项。</p>
+<p><strong>修复后</strong>：</p>
+<pre><code data-lang="">搜某个单字 → 12 条（修复前 0 条）
+搜包含该单字的双字词 → 13 条</code></pre>
+<p>（具体字词不列出，避免带出真实记忆内容；量级才是要点：<strong>从 0 到 12</strong>。）</p>
+<p><strong>关键</strong>：单字<strong>参与匹配但不计入文档长度</strong>——否则中文天然字数多会压低 BM25 分数。</p>
+<hr>
+<h2>七、契约测试</h2>
+<table><thead><tr><th>文件</th><th>项数</th><th>组数</th></tr></thead><tbody><tr><td><code>test-memory-contract.mjs</code></td><td>201</td><td>22</td></tr><tr><td><code>test-wake-state-contract.mjs</code></td><td>53</td><td>9</td></tr><tr><td><code>test-error-classify-contract.mjs</code></td><td>42</td><td>5</td></tr><tr><td><strong>合计</strong></td><td><strong>296</strong></td><td><strong>36</strong></td></tr></tbody></table>
+<p>全部只读。唯一触碰数据的路径（恢复）全部带 <code>dryRun</code>。</p>
+<p>其中包含两条<strong>结构断言</strong>（读源码而非测行为）：</p>
+<pre><code data-lang="">✅ 主进程不再直调底层 upsert
+✅ 工具层不再直调底层 upsert</code></pre>
+<p>以及 12 条<strong>排序方向断言</strong>。</p>
+<hr>
+<h2>八、检索评估（26 条 golden query）</h2>
+<p><strong>方法</strong>：手写 26 条查询，每条标注"正确条目的唯一子串"。 在 151 条有效记忆上跑三种方法，看正确条目排第几。</p>
+<p>分三档：<strong>词面</strong> 10 条（查询含原词）/ <strong>语义</strong> 10 条（换说法）/ <strong>意图</strong> 6 条（抽象提问）。</p>
+<h3>总体</h3>
+<table><thead><tr><th>方法</th><th>hit@1</th><th>hit@3</th><th>MRR</th></tr></thead><tbody><tr><td>BM25</td><td>17/26</td><td>20/26</td><td>0.736</td></tr><tr><td>向量</td><td>16/26</td><td>25/26</td><td>0.782</td></tr><tr><td><strong>RRF 融合</strong></td><td><strong>19/26</strong></td><td>23/26</td><td><strong>0.816</strong></td></tr></tbody></table>
+<h3>分档 hit@1（MRR）</h3>
+<table><thead><tr><th>方法</th><th>词面</th><th>语义</th><th>意图</th></tr></thead><tbody><tr><td>BM25</td><td><strong>10/10</strong> (1.00)</td><td>4/10 (0.54)</td><td>3/6 (0.63)</td></tr><tr><td>向量</td><td>8/10 (0.90)</td><td><strong>6/10</strong> (0.80)</td><td>2/6 (0.56)</td></tr><tr><td>RRF</td><td><strong>10/10</strong> (1.00)</td><td><strong>6/10</strong> (0.72)</td><td><strong>3/6</strong> (0.67)</td></tr></tbody></table>
+<p><strong>融合的价值在语义档：4/10 → 6/10，同时词面档不退化（10/10）。</strong></p>
+<hr>
+<h2>九、融合策略对比（8 种）</h2>
+<p><strong>方法</strong>：同一批 26 条查询，比较不同融合方式排出来的名次。</p>
+<table><thead><tr><th>方法</th><th>hit@1</th><th>hit@3</th><th>MRR</th></tr></thead><tbody><tr><td>BM25</td><td>17/26</td><td>20/26</td><td>0.736</td></tr><tr><td>向量</td><td>16/26</td><td>25/26</td><td>0.782</td></tr><tr><td><strong>RRF(1:1)</strong></td><td><strong>19/26</strong></td><td>23/26</td><td><strong>0.816</strong></td></tr><tr><td>RRF(1:2)</td><td>18/26</td><td>24/26</td><td>0.810</td></tr><tr><td>归一化加法(0.5)</td><td>19/26</td><td>23/26</td><td>0.812</td></tr><tr><td>RRF × 因子（强）</td><td>17/26</td><td>23/26</td><td>0.777</td></tr><tr><td>RRF × 因子（弱）</td><td>17/26</td><td>23/26</td><td>0.778</td></tr><tr><td><strong>RRF + 因子裁决</strong></td><td><strong>19/26</strong></td><td>23/26</td><td><strong>0.816</strong></td></tr></tbody></table>
+<h3>三条结论</h3>
+<ol><li><strong>RRF(1:1) 最优</strong>，保留。</li><li><strong>归一化加法并列</strong>（19 vs 19，MRR 0.816 vs 0.812）——没有换的理由。</li><li><strong>因子强度 strong 与 mild 结果完全相同</strong>（都是 17/26）——说明问题不在强度，在"乘法"这件事本身。</li></ol>
+<hr>
+<h2>十、三因子：乘法 vs 平手裁决</h2>
+<table><thead><tr><th>写法</th><th>hit@1</th><th>hit@3</th><th>MRR</th><th>词面档</th></tr></thead><tbody><tr><td>纯 RRF（无因子）</td><td>19/26</td><td>23/26</td><td>0.816</td><td>10/10</td></tr><tr><td><strong>RRF × 因子（乘法）</strong></td><td><strong>17/26</strong></td><td>23/26</td><td>0.777</td><td><strong>8/10</strong></td></tr><tr><td><strong>RRF + 因子裁决</strong></td><td><strong>19/26</strong></td><td>23/26</td><td><strong>0.816</strong></td><td><strong>10/10</strong></td></tr></tbody></table>
+<p><strong>hit@3 不变（23/26），只有 hit@1 受影响（19 → 17）。</strong></p>
+<p>说明乘法只是把两条本该第一的挤到第 2~3 位，没有挤出前 3。</p>
+<p>但既然"平手裁决"能拿回这 2 条、且不损失因子语义，就选它。</p>
+<h3>实现</h3>
+<pre><code data-lang="">主键 = round(相关度, 1e-4)
+次键 = 重要性 × 新鲜度 × 置顶 × 1e-5     ← 必须小于主键步长
+score = 主键 + 次键</code></pre>
+<hr>
+<h2>十一、性能</h2>
+<p>未做系统基准测试，只有零散观察：</p>
+<table><thead><tr><th>操作</th><th>耗时</th></tr></thead><tbody><tr><td>启动预热向量（151 条）</td><td>约 2 秒</td></tr><tr><td>BM25 检索 151 条</td><td>&lt; 10 ms</td></tr><tr><td>单条内容向量计算（写入时）</td><td>约 20 ms</td></tr><tr><td>单次模型判定（类别+极性+重要性）</td><td>约 1 秒</td></tr></tbody></table>
+<p><strong>写入路径的 20 ms 可接受</strong>——自动提取本来就是低频操作。</p>
+<hr>
+<h2>十二、怎么复现</h2>
+<pre><code data-lang="bash"># 契约测试（只读）
+node test-memory-contract.mjs
+node test-wake-state-contract.mjs
+node test-error-classify-contract.mjs
+
+# 检索评估（需要本地向量服务；不可达会自动跳过向量两路）
+node eval-retrieval.mjs
+node eval-fusion.mjs</code></pre>
+<p><strong>相似度分布</strong>的复现方式：</p>
+<pre><code data-lang="js">// 取有效记忆 → 调 /v1/embeddings → 两两余弦
+const r = await fetch(EMBED_ENDPOINT, {
+  method: 'POST',
+  headers: { 'content-type': 'application/json' },
+  body: JSON.stringify({ model: MODEL, input: texts }),
+});</code></pre>
+<p><strong>极性误判率</strong>的复现方式：</p>
+<pre><code data-lang="js">// 用词表判极性，统计负极性占比
+const neg = items.filter((x) =&gt; polarity(x.content) === -1).length;</code></pre></article></section>
+<section id="doc-05安全说明md"><article><h1>05 · 安全说明</h1>
+<blockquote><p><strong>这份文档不是免责声明，是交接清单。</strong></p><p>桌面上的文件<strong>不受项目 <code>.gitignore</code> 保护</strong>，所以必须主动确认里面没有敏感内容。</p></blockquote>
+<hr>
+<h2>一、本报告夹做了什么脱敏</h2>
+<table><thead><tr><th>类别</th><th>处理方式</th></tr></thead><tbody><tr><td>访问令牌 / API 密钥</td><td><strong>一律不出现</strong>。报告中没有任何真实 token</td></tr><tr><td>QQ 号 / 群号 / 用户 ID</td><td>全部替换为占位符：<code>&lt;OWNER_QQ&gt;</code> / <code>&lt;BOT_QQ&gt;</code> / <code>&lt;GROUP_ID&gt;</code> / <code>&lt;USER_ID&gt;</code></td></tr><tr><td>本机路径 / 用户名</td><td>全部替换为 <code>&lt;PROJECT_ROOT&gt;</code> / <code>&lt;STATE&gt;</code> / <code>&lt;DESKTOP&gt;</code></td></tr><tr><td>真实聊天记录 / 记忆正文</td><td><strong>不含</strong>。文档里的举例一律是<strong>中性合成句</strong>（"甲其实是乙""他做事认真"这类），与真实记忆无关</td></tr><tr><td>配置内容</td><td>不含。报告只描述字段语义，不贴配置值</td></tr><tr><td>联系人信息</td><td>不含任何第三方账号、昵称、关系描述</td></tr></tbody></table>
+<h3>验证方式：不是靠"记得脱敏"，是靠三道检查</h3>
+<p><strong>检查一 · 反查真实密钥</strong></p>
+<p>把运行环境里的真实访问令牌、API 密钥、账号、群号、本机用户名<strong>全部读出来</strong>， 逐字检查它们有没有出现在本夹的任何一个文件里。这比用正则猜"密钥长什么样"可靠。</p>
+<blockquote><p>结果：21 项真实敏感值，<strong>0 命中</strong>。</p></blockquote>
+<p><strong>检查二 · 反查真实记忆原文</strong></p>
+<p>把每条真实记忆切成 6 字窗口，逐个检查是否出现在文档里 —— 能抓到"改写时不小心抄了原句"。</p>
+<blockquote><p>结果：<strong>首轮查出 5 处真实原文被当作例子引用</strong>（都集中在实测数据那一节），</p><p>已全部替换为合成句；二次检查为 0。</p></blockquote>
+<p><strong>检查二的补充 · 4 字窗口（上线前更仔细的一轮）</strong></p>
+<p>6 字窗口会漏掉只有 4 个字的真实短语。公开版定版前又跑了一轮 <strong>4 字窗口的双向比对</strong> （文档→记忆、记忆→文档），查出 <strong>4 处 6 字窗口漏掉的真原文</strong>：</p>
+<table><thead><tr><th>位置</th><th>原真内容</th><th>已改为</th></tr></thead><tbody><tr><td>01-报告</td><td>两句真劝告句</td><td>「别见外」「别客气」等通用句</td></tr><tr><td>04-实测数据</td><td>一对真对比短语（0.787 就是它的实测值）</td><td>抽象为「重视X / 不重视」，数值保留</td></tr><tr><td>04-实测数据</td><td>一支真句里的「特别」用法</td><td>只留「特别」一词做子串演示</td></tr><tr><td>04-实测数据</td><td>一句真日常叙述</td><td>「没吃饭就出门了」合成句</td></tr></tbody></table>
+<blockquote><p>剩下的 4–8 字命中全部是<strong>通用词 / 术语</strong>（张冠李戴、自动提取、长期记忆、第三人称…），</p><p>是讨论这个主题本身必用的词汇，不构成泄漏。</p></blockquote>
+<p><strong>检查四 · PDF 元数据指纹</strong></p>
+<p>PDF 生成时会写入环境信息，这本身也是泄漏面。首版 PDF 的：</p>
+<ul><li><code>/Creator</code> 暴露了操作系统与浏览器版本（<code>Windows NT 10.0 … HeadlessChrome/157 … Edg/157</code>）</li><li><code>/Producer</code> 暴露了生成库与版本</li><li><code>/CreationDate</code> 暴露了精确生成时间</li></ul>
+<p>已用 pypdf 重写元数据，现在<strong>只剩 <code>/Title</code></strong>，无 Creator / Producer / Author / 时间戳。</p>
+<p><strong>检查三 · 工业级 PII 扫描</strong></p>
+<p>按两套成熟方案实现：</p>
+<table><thead><tr><th>依据</th><th>取用的规则</th></tr></thead><tbody><tr><td><strong>Microsoft Presidio</strong> 的实体清单</td><td>EMAIL_ADDRESS、IP_ADDRESS、PHONE_NUMBER、CREDIT_CARD（含 <strong>Luhn 校验</strong>）、UUID、MAC_ADDRESS、日期</td></tr><tr><td><strong>detect-secrets</strong>（Yelp）的熵阈值</td><td><strong>base64 = 4.5、hex = 3.0</strong>；且<strong>熵命中必须附近出现关键词</strong>（key/secret/token/密码/令牌）才报，否则噪声太大</td></tr></tbody></table>
+<p>比"自己写正则"强的地方：</p>
+<ol><li>信用卡号做 <strong>Luhn 校验</strong>，不会把任意 16 位数字当卡号</li><li><strong>熵检测</strong>能抓到没有固定格式的自建密钥（正则抓不到）</li><li><strong>私网 IP 自动排除</strong>（<code>127.0.0.1</code>、<code>10.x</code>、<code>192.168.x</code> 不算 PII）</li><li>熵命中要求<strong>上下文关键词</strong>，避免 UUID / 哈希 / 时间戳全报警</li></ol>
+<blockquote><p>结果：<strong>0 命中</strong>。</p></blockquote>
+<p><strong>而且先做了阳性对照</strong>（造一个含假邮箱、假手机、假卡号、假身份证、公网 IP、 高熵 token 的文件）验证扫描器确实能报 —— <strong>6 项全检出，<code>127.0.0.1</code> 正确排除</strong>。</p>
+<blockquote><p>这条很重要：<strong>"0 命中"必须先证明扫描器没坏</strong>，否则可能只是"测不出任何东西"。</p></blockquote>
+<h3>三道检查互补，不能互相替代</h3>
+<p>一个反直觉的实测：把<strong>含 166 处真实记忆的代码目录</strong>拿去跑 PII 扫描，结果是 <strong>0 命中</strong>。</p>
+<p>因为 PII 扫描器抓的是<strong>结构化数据</strong>（邮箱、手机、卡号、身份证）， 而那个目录泄的是<strong>中文散文</strong>（测试用例里的真实句子）。</p>
+<pre><code data-lang="">检查一（真实密钥）  → 抓"已知的凭据值"
+检查二（记忆原文）  → 抓"中文散文泄漏"     ← PII 扫描抓不到这类
+检查三（PII 扫描）  → 抓"结构化个人信息"   ← 反查抓不到未知格式的密钥</code></pre>
+<p><strong>三者跑齐，才敢说"已脱敏"。</strong></p>
+<h3>一个必须承认的翻车</h3>
+<p>第一次交付时我在本文档里写了"所有举例都是合成句"，<strong>那是凭印象写的，不是查过的</strong>。 实际有 5 处是真实记忆的原文（靠检查二发现），代码快照里还有 166 处（靠检查二发现）。</p>
+<p>现在这句话是真的 —— 因为它是被三道检查验证过的。</p>
+<p><strong>结论：本夹可以安全地给别人看，也可以安全地拷到别的地方。</strong></p>
+<hr>
+<h2>二、验证方式（可自己跑）</h2>
+<pre><code data-lang="bash"># 1) 扫密钥
+grep -rniE "sk-[a-zA-Z0-9]{20,}|accessToken|api[_-]?key|secret|password" .
+
+# 2) 扫 QQ 号（5 位以上连续数字）
+grep -rnE "[0-9]{6,}" .
+
+# 3) 扫本机路径
+grep -rniE "[A-Z]:\\\\Users\\\\|/Users/|/home/" .</code></pre>
+<p>三条都应该<strong>只在"说明性文字"里命中</strong>，不应命中任何真实值。</p>
+<hr>
+<h2>三、真实系统里有哪些敏感面（交接给下一个维护者）</h2>
+<p><strong>这些都不在本报告夹里，但在运行环境里。</strong></p>
+<h3>3.1 配置文件</h3>
+<table><thead><tr><th>文件</th><th>含什么</th><th>保护方式</th></tr></thead><tbody><tr><td><code>config.json</code></td><td><strong>访问令牌</strong>、白名单账号、模型路由</td><td>已在 <code>.gitignore</code></td></tr><tr><td><code>config.example.json</code></td><td>只有字段结构，<strong>已脱敏</strong>（令牌为空）</td><td>可入库</td></tr></tbody></table>
+<p><strong>要点</strong>：<code>config.json</code> 永远不要进仓库。发布前用 <code>config.example.json</code> 代替。</p>
+<h3>3.2 运行状态目录 <code>&lt;STATE&gt;/</code></h3>
+<table><thead><tr><th>内容</th><th>敏感度</th></tr></thead><tbody><tr><td>长期记忆正文</td><td><strong>高</strong>（个人偏好、经历、关系）</td></tr><tr><td>会话 / 聊天记录</td><td><strong>高</strong>（完整对话）</td></tr><tr><td>图片摘要</td><td><strong>高</strong>（描述用户发的图）</td></tr><tr><td>用户分片</td><td><strong>高</strong>（按人分离的档案）</td></tr><tr><td>备份目录</td><td><strong>高</strong>（历史快照，复制了上面的内容）</td></tr></tbody></table>
+<p><strong>要点</strong>：整个状态目录已在 <code>.gitignore</code>，且不应外发。备份同理。</p>
+<h3>3.3 归档目录</h3>
+<table><thead><tr><th>内容</th><th>风险</th></tr></thead><tbody><tr><td>旧配置快照</td><td><strong>含历史访问令牌</strong>（已核实：17 个文件全部含）</td></tr></tbody></table>
+<p><strong>建议</strong>：如果令牌曾经泄露或共享过，<strong>先轮换令牌，再删除这批旧快照</strong>。 旧快照保留在当前架构下没有功能价值（当前配置才是生效的那份）。</p>
+<h3>3.4 密钥文件</h3>
+<p>运行环境里有独立的密钥文件（不在仓库内）。文件权限应限制为仅本人可读。</p>
+<hr>
+<h2>四、本次改动对安全性的影响</h2>
+<h3>变好的部分</h3>
+<table><thead><tr><th>改动</th><th>安全收益</th></tr></thead><tbody><tr><td>写入统一过闸门</td><td>所有写入路径都过同一套过滤，不会有某个入口绕过</td></tr><tr><td>元信息拦截（词表 + 模型双层）</td><td>降低"系统内部记录混进长期记忆"的概率</td></tr><tr><td>归档可恢复而非删除</td><td>误删可回滚，减少数据损失风险</td></tr><tr><td>批量改动前自动备份</td><td>同上</td></tr><tr><td>冲突按证据强度裁决</td><td>弱证据（推断）不能覆盖强证据（原话），降低错误固化</td></tr></tbody></table>
+<h3>需要注意的部分</h3>
+<table><thead><tr><th>改动</th><th>风险点</th><th>缓解</th></tr></thead><tbody><tr><td>写入时会调用外部模型</td><td>记忆正文会发送到模型服务</td><td>只发单条正文、不发上下文；失败自动降级不影响写入</td></tr><tr><td>语义检索需要本地向量服务</td><td>若服务监听在非回环地址会暴露正文</td><td>建议只监听 <code>127.0.0.1</code></td></tr><tr><td>工具层可批量作废/恢复</td><td>一次调用可影响多条</td><td>有安全阀：不给 id/关键词时<strong>什么都不选</strong></td></tr><tr><td>置顶工具可批量操作</td><td>同上</td><td>同上</td></tr></tbody></table>
+<hr>
+<h2>五、三条硬建议</h2>
+<ol><li><strong>令牌轮换</strong>：如果访问令牌曾经出现在任何日志、截图、聊天记录、共享文件里，<strong>先换掉</strong>。换之前不要删旧快照（会丢证据），换之后再删。</li><li><strong>状态目录永不外发</strong>：里面是完整对话与个人档案。要分享效果就截图，不要拷目录。</li><li><strong>桌面/临时目录不放配置</strong>：本报告夹刻意不含配置。以后做类似交付也保持这个习惯——<strong>报告与凭据分开</strong>。</li></ol>
+<hr>
+<h2>六、本夹的文件清单（供核对）</h2>
+<pre><code data-lang="">README.md          索引与关键判断
+01-报告.md          这一夜做了什么（含三处判断纠正）
+02-架构.md          模块地图 / 写入链路 / 检索链路 / 数据模型
+03-文献.md          引用文献，含"故意没取"的部分
+04-实测数据.md      所有测量数字与产生方法
+05-安全说明.md      本文件
+code-说明.md        为什么这里没有代码</code></pre>
+<p><strong>没有 <code>code/</code> 目录，是刻意的。</strong></p>
+<p>第一次生成时放了一份代码快照（路径和账号都替换过占位符）， 但用"反查真实记忆原文"的方式检查后发现：<strong>7 个文件共 166 处引用了真实记忆</strong> （测试用例直接拿真实数据当 fixture，评估脚本的查询由真实记忆改写，注释里举的是真实例子）。</p>
+<p>代码对"读报告"价值很低，而清理 166 处的风险很高（替换后还要逐条确认测试语义仍成立， 且合成句会让"这测试证明的是真实场景"这句话变弱）。</p>
+<p><strong>所以选择不放，而不是放一个半脱敏的版本。</strong> 详见 <code>code-说明.md</code>。</p>
+<p>代码在哪：</p>
+<pre><code data-lang="">项目仓库 &lt;PROJECT_ROOT&gt;/src/                 权威版本
+设计留存库 &lt;ARCHIVE_ROOT&gt;/memory-layer/code/  只读快照（同样含真实测试数据，不要外发）</code></pre>
+<hr>
+<h2>七、这次脱敏的两次翻车（留着当教训）</h2>
+<p><strong>第一次</strong>：我在安全说明里写"所有举例都是合成句"。 实测发现文档里有 <strong>5 处</strong>是真实原文，已改。</p>
+<p><strong>第二次</strong>：以为代码快照"是纯逻辑，不含个人信息"。 实测发现 <strong>166 处</strong>是真实原文，直接把 <code>code/</code> 移出桌面版。</p>
+<p><strong>结论：脱敏必须靠检查，不能靠记得。</strong> 两道检查（反查密钥、反查记忆原文）跑完之前，不要在任何地方写"已脱敏"。</p></article></section>
+<section id="doc-06工程防御护栏md"><article><h1>06 · 第七章：工程防御与运行时护栏</h1>
+<blockquote><p>这一章是<strong>今晚后半段</strong>的主体：从"把数据做对"推进到"让系统在运行时不静默出错"。</p><p>结论：六条护栏 + 三个子系统，全部落地，并以「并行信号」方式接入生产（只读观测、不改行为）。</p></blockquote>
+<hr>
+<h2>一、为什么要护栏：静态阈值在流式监控下会失效</h2>
+<p>护栏监控是<strong>序贯</strong>的——每次查询后看一眼、跟阈值比一次。这带来一个隐蔽的统计学问题：</p>
+<table><thead><tr><th>做法</th><th>问题</th></tr></thead><tbody><tr><td>滚动窗口 + Wilson 区间</td><td>窗口每滑一次就偷看一眼，实际误报率远高于名义 5%，200 窗口下膨胀到 20–30%</td></tr><tr><td>Bonferroni</td><td>要求查看次数 m 事先固定，流式下 m 无界，z→0 等于放弃</td></tr><tr><td>O'Brien-Fleming</td><td>要预设总样本量 N，流式没有终点</td></tr></tbody></table>
+<p><strong>它们都救不了 optional stopping（每看一眼就多一次误报机会）。</strong></p>
+<p>所以第七章的第一条纪律：<strong>静态阈值 → anytime-valid 自适应统计原语</strong>。</p>
+<hr>
+<h2>二、六个护栏（7.6.0 ~ 7.6.6）</h2>
+<h3>7.6.0 · betting 置信序列（地基）</h3>
+<p>用 Waudby-Smith &amp; Ramdas (2024) 的有界比例 betting CS 替代静态阈值：</p>
+<pre><code data-lang="">财富过程  W_t = Π (1 + λ_t (X_i − θ))
+Ville 不等式：P(任意时刻 W_t ≥ 1/α) ≤ α   ← 任意时刻偷看都有效
+触发判定  triggered ⟺ W_t ≥ 1/α</code></pre>
+<p><strong>关键实现点（两个踩过的坑）</strong>：</p>
+<table><thead><tr><th>坑</th><th>后果</th><th>修法</th></tr></thead><tbody><tr><td>固定 λ=1 在小差距时输钱（过度下注）</td><td>期望 log-财富为负，永远积累不到 1/α</td><td>改<strong>可预测 plug-in λ</strong>：<code>λ=clip((μ̂−θ)/(θ(1−θ)), 0, 1)</code></td></tr><tr><td>λ 上限取 1/θ，X=0 时乘数=0</td><td><code>log(0) = -∞</code> 直接破产</td><td>上限取 1（对任意 θ∈(0,1) 有 1&lt;1/θ，乘数恒正）</td></tr></tbody></table>
+<p><strong>实测验证</strong>（可复现仿真）：</p>
+<pre><code data-lang="">假警报控制（μ=0.5，偷看 250 次，α=0.05）→ 误报率 0.00% ≤ 5%  ✅
+功效（μ=0.85 / μ=0.95，θ=0.7）→ 均在 300 块内触发           ✅</code></pre>
+<p>这就是第七章说 betting CS "比 Hoeffding 更紧"的真正来源——<strong>自适应 λ，不是固定 λ</strong>。</p>
+<h3>7.6.1 · 信念修订引擎（Noisy-OR + 双通道）</h3>
+<p>矛盾消解不只是"是/否"，而是多个竞争假设（alternatives）之间的信念更新。三个隐蔽故障逐一处置：</p>
+<table><thead><tr><th>故障</th><th>处置</th></tr></thead><tbody><tr><td>平局陷阱（同一观测对多假设给接近高置信度，顺序迭代无差别抬升）</td><td>分通道相对区分度 W_disc 判平局</td></tr><tr><td>相关源冒充独立证据（同源多次复述，违反 Noisy-OR 独立性）</td><td>按 provenance 去相关 + Kish 有效样本量 n_eff</td></tr><tr><td>淘汰随机化（数组触顶后随机淘汰）</td><td>淘汰后验最低者，平局用 LRU</td></tr></tbody></table>
+<p>公式（Pearl 1988 + Kish 1965）：</p>
+<pre><code data-lang="">support 通道  p ← min(1 − (1−p)(1−Δ_support), 0.99)
+defeat  通道  p ← p · (1 − Δ_defeater)
+有效样本量    n_eff = (Σw)² / Σw²</code></pre>
+<h3>7.6.2 · 语义熵网关</h3>
+<p>不确定性披露不能只靠 Prompt（轻量模型、长上下文指令遗忘会吃掉它），也不能靠词表（中文 27–40% 噪声）。</p>
+<p>改用<strong>语义熵</strong>（Farquhar et al., Nature 2024）：采样多次 → 语义聚类 → 簇分布的信息熵。</p>
+<pre><code data-lang="">SE = −Σ_c p(c) log p(c)   熵高 = 回答散落在多个语义 = 不确定</code></pre>
+<p>网关纪律：弃权优先于加前缀；兜底文本只进 content 通道、<strong>绝不进 tool_calls 参数区</strong>。</p>
+<h3>7.6.3 · time_agnostic 条件降权</h3>
+<p>身份、背景梗这类「真值不随时间衰减」的条目，不该吃新鲜度衰减；但又不能在平手时压过时间敏感条目。</p>
+<ul><li><strong>成对判据</strong>：仅当存在「相关度严格更高」的非 time_agnostic 条目时才降权，不误杀"唯一正确答案恰是 TA 且排第 1"</li><li><strong>单趟锁定</strong>：gate 基于降权前主键的 top-5，不迭代</li><li>系数 0.775（[0.7,0.85] 中点，未标定种子，只作用 1e-5 次键）</li></ul>
+<h3>7.6.4 · 融合退档 + 仲裁器</h3>
+<p>Fusion Tax（IEEE 2026）实证：即使最好的融合也在 13–48% 查询上把结果排到"较好的那个单路"之下。</p>
+<ul><li>三候选池并行（do-not-fuse 一等公民）</li><li>并集后重排（cross-encoder，可注入）</li><li>持续验证「仲裁器不弱于最强单路」，弱则退回最强单路</li></ul>
+<h3>7.6.5 · HALO 分层监控</h3>
+<p>告警条件 = 块级 betting CS 单侧下界越过阈值，<strong>仅此一条</strong>——删掉「≥20」硬门槛和「连续 N 窗」（那是对同一批数据二次计入多重性）。</p>
+<h3>7.6.6 · 护栏元治理（SLO）</h3>
+<p>护栏自身也要被监控：长期 ~0% 触发（逻辑写死/漂到盲区）或 ~100% 触发（全局失效）都应告警。双侧用同一个 betting CS 原语。</p>
+<hr>
+<h2>三、三个子系统（独立模块）</h2>
+<table><thead><tr><th>模块</th><th>对应</th><th>内容</th></tr></thead><tbody><tr><td><code>stats/betting-cs.js</code></td><td>7.6.0</td><td>plug-in λ betting CS</td></tr><tr><td><code>stats/guardrail-monitor.js</code></td><td>7.6.5/6</td><td>单侧比例 / 双侧 SLO</td></tr><tr><td><code>stats/belief-revision.js</code></td><td>7.6.1</td><td>Noisy-OR + Kish n_eff + 双通道 + 去随机淘汰</td></tr><tr><td><code>stats/semantic-entropy.js</code></td><td>7.6.2</td><td>语义聚类 + 熵 + 网关决策</td></tr><tr><td><code>stats/retrieval-arbiter.js</code></td><td>7.6.4</td><td>三池并集 + 仲裁器验证 + 融合诊断</td></tr></tbody></table>
+<hr>
+<h2>四、接入生产：并行信号，不改行为</h2>
+<p><strong>关键决定</strong>：六块全部以「<strong>并行信号</strong>」方式接入，即它们跑在真实数据上、把信号打进日志，但<strong>不改变任何裁决/排序/回复内容</strong>。</p>
+<table><thead><tr><th>子系统</th><th>接在哪</th><th>日志关键词</th></tr></thead><tbody><tr><td>belief-revision</td><td>写入路径（冲突消解）</td><td><code>信念修订</code></td></tr><tr><td>semantic-entropy</td><td>注入路径（检索分散度代理）</td><td><code>语义分散度诊断</code></td></tr><tr><td>retrieval-arbiter</td><td>检索路径（融合税）</td><td><code>融合税诊断</code></td></tr></tbody></table>
+<p>为什么不是"直接改行为"：完整切换（信念接管裁决、LLM 采样语义熵、arbiter 退档）要么改写入逻辑（高风险）、要么加 2-3 倍 LLM 成本。正确顺序是<strong>先攒几天真实信号，用数据决定该不该转正</strong>。</p>
+<p><strong>接入前做了备份</strong>：<code>backups/pre-ch7-integration-&lt;时间戳&gt;/</code> + git tag 同名，可秒回滚。</p>
+<hr>
+<h2>五、测试</h2>
+<pre><code data-lang="">memory 契约      213
+wake-state        53
+error-classify    42
+betting-cs        11
+guardrail-monitor   5
+ch7-subsystems     30
+─────────────────────
+合计             354 项  全过</code></pre>
+<hr>
+<h2>六、诚实清单（还没做的）</h2>
+<table><thead><tr><th>项</th><th>为什么</th></tr></thead><tbody><tr><td>cross-encoder 重排</td><td>需要模型，<code>retrieval-arbiter</code> 只留了注入点</td></tr><tr><td>完整语义熵（LLM 采样 2-3 次）</td><td>成本高 + 需采样 infra，暂用检索分散度代理</td></tr><tr><td>护栏从"信号"升级成"改行为"</td><td>等几天日志证据，据实决定</td></tr></tbody></table></article></section>
+<section id="doc-07存量迁移与体检md"><article><h1>07 · 存量迁移与体检</h1>
+<blockquote><p>这一章记一个<strong>一夜内复发 4 次</strong>的问题，以及最后落成的防复发机制。</p><p>它比任何单个功能都重要：<strong>靠人记的教训必然再犯，只有做成启动哨兵才可靠。</strong></p></blockquote>
+<hr>
+<h2>一、同一个坑，四次</h2>
+<table><thead><tr><th>次</th><th>字段</th><th>事故</th></tr></thead><tbody><tr><td>1</td><td><code>polarity</code></td><td>只接一个写入入口，覆盖率卡 149/150</td></tr><tr><td>2</td><td><code>beliefFrom/To</code></td><td>改名后要迁移 199 条</td></tr><tr><td>3</td><td><code>id</code></td><td>重构时丢了，新条目没有 id（而删除/恢复/置顶都按 id 操作）</td></tr><tr><td>4</td><td><code>importance</code></td><td>改成按 kind 算，但 <strong>92% 存量仍是旧硬编码 5</strong>，检索评分里因子恒等于 1.0</td></tr></tbody></table>
+<p><strong>根因</strong>：<code>writeMemory → deriveFields</code> 这条单一写入入口只保护<strong>新数据</strong>。存量数据不在任何写路径上、没有任何机制碰它、也不会报错——于是「修好的功能在旧数据上还是死的」。</p>
+<h2>二、为什么架构改了还复发</h2>
+<p>因为「单一入口」和「存量迁移」是<strong>两件不同的事</strong>：</p>
+<pre><code data-lang="">单一写入入口  →  保证「以后新写的」按新规则生成
+存量迁移      →  修正「已经写进去的」旧数据</code></pre>
+<p>前者的保证再强，也管不到后者。一夜四次，就是每次只改了前者、忘了后者。</p>
+<h2>三、落成的机制</h2>
+<h3>1. 回填</h3>
+<p><code>importance</code> 144 条回填，分布从 <code>{5:142}</code> 变成 <code>{3:35, 4:5, 5:6, 6:45, 7:5, 8:31, 9:28}</code>——7 种取值、不再 92% 挤在一个值上。</p>
+<h3>2. 启动哨兵（关键）</h3>
+<p>检测逻辑抽成 <code>memory-audit.js</code>，<strong>桥接每次启动自动跑</strong>：</p>
+<pre><code data-lang="">[memory] 存量体检通过：182 条有效 / 55 条沉底，无异常</code></pre>
+<p>不靠人记得跑。有问题每次启动都会喊。</p>
+<h3>3. 三条迁移铁律</h3>
+<ol><li>改字段生成逻辑/默认值 → 改前备份 → 改后跑体检 → 写迁移</li><li>判据：<strong>单一取值占比 &gt;70% = 疑似未回填</strong>（<code>polarity</code> 天然偏斜，只查 100%）</li><li>迁移脚本<strong>只改目标字段，绝不碰 <code>updatedAt</code></strong>（那是检索的新鲜度基准，改了等于抹平新鲜度信号）</li></ol>
+<hr>
+<h2>四、两次自己的次生事故（已修）</h2>
+<table><thead><tr><th>事故</th><th>后果</th><th>教训</th></tr></thead><tbody><tr><td>回填脚本顺手改了 <code>updatedAt</code></td><td>新鲜度信号被抹平，检索指标掉</td><td>迁移只改目标字段</td></tr><tr><td>importance 进相关度排序</td><td>实测拉低 hit@1（18→17）</td><td>importance 是「谁进上下文预算」的判据，不是相关性</td></tr></tbody></table>
+<hr>
+<h2>五、一个没解决的（记着）</h2>
+<p>检索评估数字会随记忆条数变化——151 条时 19/25，加 4 条新记忆变 18/25。<strong>跨数据状态不能直接比数字</strong>。要真正追踪回归，得冻结一份评估快照，这个还没做。</p></article></section>
+<section id="doc-READMEmd"><article><h1>泡泡记忆模块 · 2026-11-17 一夜工作留档</h1>
+<blockquote><p>本文档夹是<strong>脱敏版</strong>：不含任何密钥、账号、聊天内容、本机路径。</p><p>目的是让别人（或以后的自已）能读懂"这一夜改了什么、为什么这么改"。</p></blockquote>
+<hr>
+<h2>怎么打开（三种任选）</h2>
+<table><thead><tr><th>方式</th><th>说明</th></tr></thead><tbody><tr><td><strong>双击 <code>打开报告.cmd</code></strong></td><td>用默认浏览器打开合并版 HTML —— <strong>最省事，推荐</strong></td></tr><tr><td><strong>双击 <code>report.html</code></strong></td><td>同上，直接开浏览器（不依赖任何编辑器）</td></tr><tr><td>用编辑器打开 <code>.md</code></td><td>本机 <code>.md</code> 没有文件关联，双击不会开；要用编辑器得从"打开文件"里选</td></tr></tbody></table>
+<blockquote><p>为什么准备 HTML：这台机器上 <code>.md</code> 没有文件关联，双击打不开；</p><p>PDF 又要额外工具。HTML 是最没有依赖的形式——任何浏览器都能开，还能打印。</p></blockquote>
+<hr>
+<h2>一句话</h2>
+<p><strong>把记忆系统从"会静默损坏数据"改造成"写入与检索各有单一收口、阈值全部有实测依据、关键不变量有断言保护"，并加了一层"运行时防御护栏"（betting 置信序列 + 信念修订 + 语义熵 + 融合仲裁）。</strong></p>
+<ul><li>契约测试：<strong>354 项</strong>（213 + 53 + 42 + 11 + 5 + 30），全绿</li><li>检索评估：26 条 golden query，融合方法 hit@1 <strong>19/26</strong>、MRR <strong>0.816</strong></li><li>记忆总量：237 条（182 有效 / 55 归档）</li><li>存量字段体检：<strong>每次启动自动跑</strong>，无异常</li></ul>
+<hr>
+<h2>目录</h2>
+<table><thead><tr><th>文件</th><th>内容</th><th>什么时候看</th></tr></thead><tbody><tr><td><code>01-报告.md</code></td><td>这一夜做了什么、每个改动解决什么问题、实测证据</td><td>想知道发生了什么</td></tr><tr><td><code>02-架构.md</code></td><td>模块地图、写入链路、检索链路、数据模型</td><td>想理解系统怎么组织的</td></tr><tr><td><code>03-文献.md</code></td><td>引用了哪些论文/项目，<strong>具体取了什么、故意没取什么</strong></td><td>想核对设计依据</td></tr><tr><td><code>04-实测数据.md</code></td><td>所有测量数字与产生方法</td><td>想质疑某个阈值</td></tr><tr><td><code>05-安全说明.md</code></td><td>脱敏了什么、为什么、本地还有哪些敏感面</td><td><strong>交接前必读</strong></td></tr><tr><td><code>06-工程防御护栏.md</code></td><td><strong>第七章</strong>：六条护栏 + 三个子系统 + 接入方式</td><td>想知道后半段做了什么</td></tr><tr><td><code>07-存量迁移与体检.md</code></td><td>一夜复发 4 次的「没回填」坑 + 启动哨兵</td><td>想知道怎么防复发</td></tr><tr><td><code>code-说明.md</code></td><td><strong>为什么这里没有代码</strong>（代码快照含真实测试数据）</td><td>想找源码时先看这个</td></tr></tbody></table>
+<blockquote><p>⚠️ 本夹<strong>不含代码快照</strong>。原因见 <code>code-说明.md</code>：</p><p>代码里的测试用例和注释引用了真实记忆内容，不适合放在可能被分享的目录。</p><p>要读设计看 <code>02-架构.md</code> 和 <code>06-工程防御护栏.md</code>，要改代码去项目仓库。</p></blockquote>
+<hr>
+<h2>这一夜的关键判断（先看这个能省很多时间）</h2>
+<ol><li><strong>写入必须单一入口。</strong> 同一个字段在四个地方各写一遍，必然漏。改成 <code>writeMemory()</code> 一处补齐后，<code>polarity</code>/<code>id</code> 两次事故都消失了。</li><li><strong>检索也必须单一入口。</strong> 两条检索路径各缺一半能力（一条没有向量、一条没有新鲜度），收口后才谈得上调优。</li><li><strong>排序项要有方向断言。</strong> 文献点名过：倒排序的 bug 因为"只占分数零头 + 没有断言"能活很久。</li><li><strong>阈值必须实测。</strong> 本次所有阈值（0.72、0.45、0.6~1.4）后面都附了产生它的方法和样本量。</li><li><strong>评估工具本身要先被怀疑。</strong> 有一次我判断"RRF 不如加法"，实际是对比脚本自己有 bug。</li></ol>
+<hr>
+<h2>三处我判断错了、后来纠正的地方</h2>
+<p>留着是为了提醒：<strong>结论要基于能复现的测量。</strong></p>
+<table><thead><tr><th>我的第一判断</th><th>实测后的事实</th><th>怎么发现的</th></tr></thead><tbody><tr><td>用 embedding 相似度当矛盾判据</td><td>向量分不开"矛盾"和"同一件事的不同说法"（0.787 vs 0.797 重叠）</td><td>在真实数据上量了两两相似度分布</td></tr><tr><td>RRF 融合不如归一化加法</td><td>RRF(1:1) 实际最优，加法只并列</td><td>对比脚本修 bug 后重测</td></tr><tr><td>三因子乘上去更合理</td><td>乘法会拉低 hit@1（17→19 的差），改"平手裁决"才对</td><td>扩到 26 条 golden query 后暴露</td></tr></tbody></table>
+<hr>
+<h2>还没做完的（诚实清单）</h2>
+<ul><li>检索 golden set 只有 26 条，且没有"同一主题、不同时间"的用例，所以<strong>测不出新鲜度加权到底有没有用</strong>——只能测出它不伤害相关度。</li><li>没有世界时间（只有"我们何时相信"，没有"事实何时为真"）。</li><li>没有结构化 subject/predicate，矛盾判定仍靠文本近似。</li></ul>
+<p>详见 <code>01-报告.md</code> 末节。</p>
+<hr>
+<h2>开源版说明（GitHub）</h2>
+<p>本夹是<strong>公开版</strong>，在桌面内留档的基础上去掉了：</p>
+<ul><li>任何本机路径、用户名、盘符</li><li>任何账号/群号/会话标识（占位符代替）</li><li>所有真实记忆内容（全部换成中性合成例句）</li><li>Windows 专用启动脚本（<code>打开报告.cmd</code>）</li></ul>
+<p><strong>脱敏方式不是靠"记得"，是靠三道检查</strong>：反查真实密钥（读真实值逐字比对）、反查真实记忆原文（6 字窗口 + 中文过滤）、工业级 PII 扫描（Presidio 规则 + detect-secrets 熵阈值）。三道都跑过、都有阳性对照验证工具本身没坏。详见 <code>05-安全说明.md</code>。</p>
+<hr>
+<h2>许可证</h2>
+<p>本项目以 <strong>GNU General Public License v3.0</strong> 发布，全文见 <code>LICENSE</code>。</p>
+<pre><code data-lang="">Copyright (C) 2026 泡泡记忆模块项目贡献者
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.</code></pre>
+<hr>
+<h2>防伪定版</h2>
+<table><thead><tr><th>项</th><th>值</th></tr></thead><tbody><tr><td>定版日期</td><td>2026-11-17</td></tr><tr><td>源码版本</td><td>以 <code>SHA256SUMS.txt</code> 为准</td></tr><tr><td>定版 PDF</td><td><code>泡泡记忆模块报告-2026-11-17.pdf</code>（61 页）</td></tr><tr><td>校验文件</td><td><code>SHA256SUMS.txt</code></td></tr></tbody></table>
+<p><strong>校验方法</strong>：</p>
+<pre><code data-lang="bash"># Linux / macOS
+sha256sum -c SHA256SUMS.txt
+
+# Windows (PowerShell)
+Get-FileHash .\泡泡记忆模块报告-2026-11-17.pdf -Algorithm SHA256</code></pre>
+<p><strong>任何文件被改动，哈希即不符。</strong> 这是"定版"的意义——不是防拷贝，是防篡改。</p></article></section>
+<section id="doc-code说明md"><article><h1>为什么这里没有代码</h1>
+<blockquote><p>一句话：<strong>代码快照里含真实记忆内容，不适合放在可能被分享的目录里。</strong></p></blockquote>
+<hr>
+<h2>发现了什么</h2>
+<p>生成桌面版时，我把 15 个源码文件复制了过来（路径和账号都替换成了占位符）。</p>
+<p>随后做了一次<strong>反查</strong>：把每条真实记忆切成 6 字窗口，逐个检查是否出现在报告的文件里。</p>
+<p>结果：</p>
+<pre><code data-lang="">166 个片段命中，分布在 7 个文件：
+  test-memory-contract.mjs   137 处   ← 测试用例直接用了真实记忆当数据
+  eval-retrieval.mjs          30 处   ← 检索评估的 golden query 由真实记忆改写而来
+  eval-fusion.mjs             30 处
+  memory-schema.js            17 处   ← 注释里举的例子
+  correction.js                9 处
+  memory-merge.js              9 处
+  memory-write.js              8 处</code></pre>
+<p>原因很自然：<strong>这些文件本来就是为真实数据写的</strong>—— 测试要跑真实语义，评估要在真实库上测，注释为了讲清楚用了真实例子。</p>
+<hr>
+<h2>为什么不"就地脱敏"</h2>
+<p>技术上能做：把测试里的真实句子换成合成句。但：</p>
+<ol><li><strong>量大且分散</strong>——166 处、7 个文件，替换后还要逐个跑测试确认语义性质仍成立。</li><li><strong>会失真</strong>——测试用例换成合成句后，和真实数据的分布就不再一致，"这测试证明的是真实场景"这句话就弱了。</li><li><strong>收益低</strong>——代码对"读报告"几乎没有价值。要理解架构，<code>02-架构.md</code> 里的图比读源码快得多。</li></ol>
+<p><strong>所以选择不放，而不是放一个半脱敏的版本。</strong></p>
+<hr>
+<h2>代码在哪</h2>
+<pre><code data-lang="">项目仓库 &lt;PROJECT_ROOT&gt;/src/          权威版本
+设计留存库 &lt;ARCHIVE_ROOT&gt;/memory-layer/code/   只读快照（同样含真实测试数据，不要外发）</code></pre>
+<p><strong>注意</strong>：留存库里的代码快照<strong>也不是脱敏的</strong>。它是本地私有档案， 只用于"以后回看当时怎么写的"，不应该拷到别处、也不应该推到公开仓库。</p>
+<hr>
+<h2>如果你确实需要看代码</h2>
+<p>三条路，按敏感度递增：</p>
+<table><thead><tr><th>方式</th><th>适合</th></tr></thead><tbody><tr><td>读 <code>02-架构.md</code></td><td>想知道设计怎么组织的 —— <strong>首选，零泄漏风险</strong></td></tr><tr><td>读 <code>03-文献.md</code> + <code>04-实测数据.md</code></td><td>想知道为什么这么选、阈值哪来的</td></tr><tr><td>直接读仓库源码</td><td>要改代码的人 —— 它就在项目里，本来就有全部上下文</td></tr></tbody></table>
+<hr>
+<h2>教训</h2>
+<p><strong>"我以为我脱敏了"不等于脱敏。</strong></p>
+<p>第一次交付时，我在安全说明里写了"所有举例都是合成句"。 实际上：</p>
+<ul><li>文档里 5 处是真实原文（已改）</li><li>代码里 166 处是真实原文（本文件就是为此而生）</li></ul>
+<p>两道检查（反查密钥、反查记忆原文）才让这句话变成真的。 <strong>脱敏必须靠检查，不能靠记得。</strong></p></article></section></main>
+</body>
+</html>
